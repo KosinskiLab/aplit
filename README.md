@@ -12,7 +12,7 @@ A web interface for analyzing AlphaPulldown predictions.
 
 **Requirements:** Python 3.8+
 ```bash
-pip install git+https://github.com/KosinskiLab/aplit.git
+pip install git+ssh://git@github.com/KosinskiLab/aplit.git
 ```
 
 ## Usage
