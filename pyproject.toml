@@ -1,0 +1,26 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "aplit"
+version = "1.0.0"
+description = "aplit"
+authors = ["Valentin Maurer <valentin.maurer@embl-hamburg.de>"]
+license = "GPL-2.0-only"
+readme = "README.md"
+repository = "https://github.com/KosinskiLab/aplit"
+packages = [{include = "aplit", from = "src"}]
+include = [
+    "LICENSE",
+    "README.md",
+]
+
+[tool.poetry.scripts]
+aplit = "aplit.cli:main"
+
+[tool.poetry.dependencies]
+streamlit = ">=1.51.0"
+pandas = ">=2.2.2"
+matplotlib = ">=3.10.5"
+numpy = ">=1.26.4"
