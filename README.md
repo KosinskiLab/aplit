@@ -2,8 +2,6 @@
 
 A web interface for analyzing AlphaPulldown predictions.
 
-## Features
-
 - 🎨 Clean, responsive interface with real-time filtering
 - 📊 Interactive PAE heatmaps and 3D structure viewer
 - 🔄 Optional auto-refresh for monitoring running predictions
