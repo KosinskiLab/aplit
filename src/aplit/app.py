@@ -298,7 +298,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
         {"key": "iptm_ptm", "label": "ipTM+pTM", "width": 1},
     ]
     if "mean_pae" in filtered_df.columns:
-        column_specs.append({"key": "mean_pae", "label": "Mean PAE (Å)", "width": 1})
+        column_specs.append({"key": "mean_pae", "label": "Mean PAE", "width": 1})
     alphajudge_columns = [
         ("global_dockq", tooltip("DockQ", "Global DockQ score")),
         ("best_interface_pdockq2", tooltip("pDQ2", "Best interface pDockQ2")),
@@ -340,6 +340,12 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
         text-align: center;
         font-size: 0.9rem;
     }
+    .table-row-header, .table-row-cell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+    }
     .table-header span {
         display: block;
         width: 100%;
@@ -373,16 +379,22 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
     header_cols = [spec["label"] for spec in column_specs]
     col_widths = [spec["width"] for spec in column_specs]
 
-    cols = st.columns(col_widths)
-    for col, col_name in zip(cols, header_cols):
-        with col:
-            st.markdown(
-                f'<div class="table-header">{col_name}</div>', unsafe_allow_html=True
-            )
+    table_container = st.container(height=400)
+    with table_container:
+        header_row = st.columns(col_widths)
+        for col, col_name in zip(header_row, header_cols):
+            with col:
+                st.markdown(
+                    f'<div class="table-header table-row-header">{col_name}</div>',
+                    unsafe_allow_html=True,
+                )
 
-    # Display rows as clickable buttons
-    container = st.container(height=400)
-    with container:
+        st.markdown(
+            '<hr style="margin: 0; border-color: #e9ecef;">',
+            unsafe_allow_html=True,
+        )
+
+        # Display rows as clickable buttons
         for idx, row in display_df.iterrows():
             job_name = row["job"]
             row_cols = st.columns(col_widths)
@@ -390,6 +402,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
             for col, spec in zip(row_cols, column_specs):
                 key = spec["key"]
                 with col:
+                    st.markdown('<div class="table-row-cell">', unsafe_allow_html=True)
                     if key == "job":
                         if st.button(
                             job_name,
@@ -481,6 +494,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
                             st.write("N/A")
                     elif key == "n_models":
                         st.write(f"{row['n_models']}")
+                    st.markdown("</div>", unsafe_allow_html=True)
 
             # Add horizontal line between rows
             if idx < display_df.index[-1]:
