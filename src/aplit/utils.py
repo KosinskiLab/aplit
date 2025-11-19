@@ -297,6 +297,38 @@ class AlphaPulldownAnalyzer:
                     if interface_df is not None
                     else None
                 )
+                interface_fields: Dict[str, Any] = {}
+                if interface_summary is not None:
+                    skip_fields = {"jobs", "job", "model_used", "interface"}
+                    for col, value in interface_summary.items():
+                        if col in skip_fields:
+                            continue
+                        if col in {"iptm", "iptm_ptm"}:
+                            continue
+                        numeric_val = self._safe_float(value)
+                        if numeric_val is not None:
+                            interface_fields[col] = numeric_val
+                        else:
+                            interface_fields[col] = value
+
+                global_dockq = (
+                    float(interface_summary.get("pDockQ/mpDockQ"))
+                    if interface_summary is not None
+                    and pd.notna(interface_summary.get("pDockQ/mpDockQ"))
+                    else None
+                )
+                interface_ipsae = (
+                    float(interface_summary.get("interface_ipSAE"))
+                    if interface_summary is not None
+                    and pd.notna(interface_summary.get("interface_ipSAE"))
+                    else None
+                )
+                interface_lis = (
+                    float(interface_summary.get("interface_LIS"))
+                    if interface_summary is not None
+                    and pd.notna(interface_summary.get("interface_LIS"))
+                    else None
+                )
 
                 if interface_summary is not None:
                     iptm_score = (
@@ -315,40 +347,37 @@ class AlphaPulldownAnalyzer:
                         else mean_pae
                     )
 
-                results.append(
-                    {
-                        "job": job_dir.name,
-                        "iptm_ptm": iptm_ptm_score,
-                        "iptm": iptm_score,
-                        "mean_pae": mean_pae,
-                        "best_model": best_model,
-                        "path": str(job_dir),
-                        "n_models": len(models),
-                        "job_type": job_type,
-                        "ptm": float(interface_summary.get("ptm"))
-                        if interface_summary is not None
-                        and pd.notna(interface_summary.get("ptm"))
-                        else None,
-                        "confidence_score": float(
-                            interface_summary.get("confidence_score")
-                        )
-                        if interface_summary is not None
-                        and pd.notna(interface_summary.get("confidence_score"))
-                        else None,
-                        "global_dockq": float(
-                            interface_summary.get("pDockQ/mpDockQ")
-                        )
-                        if interface_summary is not None
-                        and pd.notna(interface_summary.get("pDockQ/mpDockQ"))
-                        else None,
-                        "interface_csv": str(job_dir / "interfaces.csv")
-                        if interface_df is not None
-                        else None,
-                        "interface_summary_model": interface_summary.get("model_used")
-                        if interface_summary is not None
-                        else None,
-                    }
-                )
+                result_entry = {
+                    "job": job_dir.name,
+                    "iptm_ptm": iptm_ptm_score,
+                    "iptm": iptm_score,
+                    "mean_pae": mean_pae,
+                    "best_model": best_model,
+                    "path": str(job_dir),
+                    "n_models": len(models),
+                    "job_type": job_type,
+                    "ptm": float(interface_summary.get("ptm"))
+                    if interface_summary is not None
+                    and pd.notna(interface_summary.get("ptm"))
+                    else None,
+                    "confidence_score": float(
+                        interface_summary.get("confidence_score")
+                    )
+                    if interface_summary is not None
+                    and pd.notna(interface_summary.get("confidence_score"))
+                    else None,
+                    "global_dockq": global_dockq,
+                    "best_interface_ipsae": interface_ipsae,
+                    "best_interface_lis": interface_lis,
+                    "interface_csv": str(job_dir / "interfaces.csv")
+                    if interface_df is not None
+                    else None,
+                    "interface_summary_model": interface_summary.get("model_used")
+                    if interface_summary is not None
+                    else None,
+                }
+                result_entry.update(interface_fields)
+                results.append(result_entry)
 
             except Exception as e:
                 st.warning(f"Error processing {job_dir.name}: {e}")

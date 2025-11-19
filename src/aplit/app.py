@@ -179,6 +179,31 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
 
     st.divider()
 
+    base_columns_excluded = {
+        "job",
+        "iptm",
+        "iptm_ptm",
+        "mean_pae",
+        "best_model",
+        "path",
+        "n_models",
+        "job_type",
+        "ptm",
+        "confidence_score",
+        "interface_csv",
+        "interface_summary_model",
+    }
+    alphajudge_numeric_cols = []
+    for col in results_df.columns:
+        if col in base_columns_excluded:
+            continue
+        if not pd.api.types.is_numeric_dtype(results_df[col]):
+            continue
+        if not results_df[col].notna().any():
+            continue
+        alphajudge_numeric_cols.append(col)
+    alphajudge_available = len(alphajudge_numeric_cols) > 0
+
     # Filters and search in one row
     col1, col2, col3, col4 = st.columns([3, 1.5, 1.5, 1])
     with col1:
@@ -193,8 +218,10 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
         max_pae = st.slider(
             "Maximum mean PAE (Å)", 0.0, 30.0, max_pae, 0.5, key="pae_filter"
         )
+    sort_options = ["ipTM", "ipTM+pTM", "Job name"]
+    sort_options.extend(alphajudge_numeric_cols)
     with col4:
-        sort_by = st.selectbox("Sort by", ["ipTM", "ipTM+pTM", "Job name"])
+        sort_by = st.selectbox("Sort by", sort_options)
 
     # Re-apply filters with updated values
     filtered_df = results_df.copy()
@@ -210,23 +237,72 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
             filtered_df["job"].str.contains(search_term, case=False)
         ]
 
+    # AlphaJudge-specific filters
+    alphajudge_filter_ranges: Dict[str, Tuple[float, float]] = {}
+    if alphajudge_available:
+        with st.expander("AlphaJudge filters", expanded=False):
+            filter_columns = st.columns(2)
+            for idx, col in enumerate(alphajudge_numeric_cols):
+                series = results_df[col].dropna()
+                if series.empty:
+                    continue
+                min_val = float(series.min())
+                max_val = float(series.max())
+                target_col = filter_columns[idx % 2]
+                with target_col:
+                    if min_val == max_val:
+                        st.caption(f"{col}: {min_val:.3f}")
+                    else:
+                        step = max((max_val - min_val) / 100, 0.0001)
+                        alphajudge_filter_ranges[col] = st.slider(
+                            col,
+                            min_val,
+                            max_val,
+                            (min_val, max_val),
+                            step=step,
+                            key=f"alphajudge_filter_{col}",
+                        )
+
     # Apply sorting
     if sort_by == "ipTM":
         filtered_df = filtered_df.sort_values("iptm", ascending=False)
     elif sort_by == "ipTM+pTM":
         filtered_df = filtered_df.sort_values("iptm_ptm", ascending=False)
+    elif sort_by in alphajudge_numeric_cols:
+        filtered_df = filtered_df.sort_values(
+            sort_by, ascending=False, na_position="last"
+        )
     else:
         filtered_df = filtered_df.sort_values("job")
+
+    # Apply AlphaJudge filters
+    for col, value_range in alphajudge_filter_ranges.items():
+        filtered_df = filtered_df[
+            (filtered_df[col].isna())
+            | (
+                (filtered_df[col] >= value_range[0])
+                & (filtered_df[col] <= value_range[1])
+            )
+        ]
 
     # Display table
     st.subheader(f"Predictions ({len(filtered_df)} results)")
 
     # Prepare display dataframe
-    display_cols = ["job", "iptm", "iptm_ptm", "n_models"]
+    column_specs = [
+        {"key": "job", "label": "Job", "width": 3},
+        {"key": "iptm", "label": "ipTM", "width": 1},
+        {"key": "iptm_ptm", "label": "ipTM+pTM", "width": 1},
+    ]
     if "mean_pae" in filtered_df.columns:
-        display_cols.insert(3, "mean_pae")
+        column_specs.append({"key": "mean_pae", "label": "Mean PAE (Å)", "width": 1})
+    for col in ["global_dockq", "best_interface_ipsae", "best_interface_lis"]:
+        if col in filtered_df.columns:
+            column_specs.append({"key": col, "label": col, "width": 1})
+    column_specs.append({"key": "n_models", "label": "Models", "width": 1})
 
-    display_df = filtered_df[display_cols].copy()
+    display_keys = [spec["key"] for spec in column_specs]
+    display_df = filtered_df[display_keys].copy()
 
     # CSS for table borders and styling
     st.markdown(
@@ -266,15 +342,12 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
     )
 
     # Create clickable table header
-    header_cols = ["Job", "ipTM", "ipTM+pTM"]
-    if "mean_pae" in display_cols:
-        header_cols.append("Mean PAE (Å)")
-    header_cols.append("Models")
+    header_cols = [spec["label"] for spec in column_specs]
+    col_widths = [spec["width"] for spec in column_specs]
 
-    # Header with borders
-    cols = st.columns([3, 1, 1] + ([1] if "mean_pae" in display_cols else []) + [1])
-    for i, col_name in enumerate(header_cols):
-        with cols[i]:
+    cols = st.columns(col_widths)
+    for col, col_name in zip(cols, header_cols):
+        with col:
             st.markdown(
                 f'<div class="table-header">{col_name}</div>', unsafe_allow_html=True
             )
@@ -284,40 +357,50 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
     with container:
         for idx, row in display_df.iterrows():
             job_name = row["job"]
+            row_cols = st.columns(col_widths)
 
-            # Create columns for each row
-            if "mean_pae" in display_cols:
-                col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
-            else:
-                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
-
-            # Job name as button - clicking navigates to viewer
-            with col1:
-                if st.button(job_name, key=f"job_{idx}", width="stretch"):
-                    navigate_to_viewer(job_name)
-
-            # Metrics with color coding for ipTM
-            with col2:
-                iptm_val = row["iptm"]
-                color = (
-                    "green" if iptm_val > 0.7 else "orange" if iptm_val > 0.5 else "red"
-                )
-                st.markdown(f":{color}[**{iptm_val:.3f}**]")
-
-            with col3:
-                st.write(f"{row['iptm_ptm']:.3f}")
-
-            if "mean_pae" in display_cols:
-                with col4:
-                    if pd.notna(row["mean_pae"]):
-                        st.write(f"{row['mean_pae']:.1f}")
-                    else:
-                        st.write("N/A")
-                with col5:
-                    st.write(f"{row['n_models']}")
-            else:
-                with col4:
-                    st.write(f"{row['n_models']}")
+            for col, spec in zip(row_cols, column_specs):
+                key = spec["key"]
+                with col:
+                    if key == "job":
+                        if st.button(
+                            job_name, key=f"job_{job_name}_{idx}", width="stretch"
+                        ):
+                            navigate_to_viewer(job_name)
+                    elif key == "iptm":
+                        iptm_val = row["iptm"]
+                        color = (
+                            "green"
+                            if iptm_val > 0.7
+                            else "orange"
+                            if iptm_val > 0.5
+                            else "red"
+                        )
+                        st.markdown(f":{color}[**{iptm_val:.3f}**]")
+                    elif key == "iptm_ptm":
+                        st.write(f"{row['iptm_ptm']:.3f}")
+                    elif key == "mean_pae":
+                        if pd.notna(row["mean_pae"]):
+                            st.write(f"{row['mean_pae']:.1f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "global_dockq":
+                        if pd.notna(row["global_dockq"]):
+                            st.write(f"{row['global_dockq']:.3f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "best_interface_ipsae":
+                        if pd.notna(row["best_interface_ipsae"]):
+                            st.write(f"{row['best_interface_ipsae']:.3f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "best_interface_lis":
+                        if pd.notna(row["best_interface_lis"]):
+                            st.write(f"{row['best_interface_lis']:.3f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "n_models":
+                        st.write(f"{row['n_models']}")
 
             # Add horizontal line between rows
             if idx < display_df.index[-1]:
@@ -357,7 +440,29 @@ def render_viewer_page(results_df: pd.DataFrame):
     if st.session_state.selected_job and st.session_state.selected_job in job_list:
         default_idx = job_list.index(st.session_state.selected_job)
 
-    selected_job = st.selectbox("Select prediction", job_list, index=default_idx)
+    st.markdown(
+        """
+        <style>
+        .next-pred-btn button {
+            background-color: #b5f5b0 !important;
+            color: #0f3d0f !important;
+            font-weight: 600 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    select_col, next_col = st.columns([4, 1])
+    with select_col:
+        selected_job = st.selectbox("Select prediction", job_list, index=default_idx)
+    with next_col:
+        st.markdown('<div class="next-pred-btn">', unsafe_allow_html=True)
+        if st.button("Next prediction →", key="next_prediction_button", width="stretch"):
+            next_idx = (job_list.index(selected_job) + 1) % len(job_list)
+            st.session_state.selected_job = job_list[next_idx]
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # Update session state
     st.session_state.selected_job = selected_job
@@ -472,22 +577,12 @@ def render_viewer_page(results_df: pd.DataFrame):
     st.divider()
 
     # Tabs for different views
-    tab1, tab2, tab3 = st.tabs(["PAE Plot", "Structure (pLDDT)", "Structure (Chains)"])
-
-    with tab1:
-        if pae_image:
-            st.image(str(pae_image), use_column_width=True)
-        elif pae_file:
-            fig = plot_pae_heatmap(pae_file, figsize=(10, 10))
-            if fig:
-                st.pyplot(fig)
-        else:
-            st.warning("PAE file not found for this model")
+    tab1, tab2, tab3 = st.tabs(["Structure (pLDDT)", "Structure (Chains)", "PAE Plot"])
 
     structure_file = selected_model.get("structure_file") or selected_model.get("pdb_file")
     structure_format = selected_model.get("structure_format", "pdb")
 
-    with tab2:
+    with tab1:
         if structure_file and structure_file.exists():
             html = create_3dmol_view(
                 structure_file,
@@ -499,7 +594,7 @@ def render_viewer_page(results_df: pd.DataFrame):
         else:
             st.warning("Structure file not found")
 
-    with tab3:
+    with tab2:
         if structure_file and structure_file.exists():
             html = create_3dmol_view(
                 structure_file,
@@ -510,6 +605,16 @@ def render_viewer_page(results_df: pd.DataFrame):
             components.html(html, height=650)
         else:
             st.warning("Structure file not found")
+
+    with tab3:
+        if pae_image:
+            st.image(str(pae_image), width="stretch")
+        elif pae_file:
+            fig = plot_pae_heatmap(pae_file, figsize=(10, 10))
+            if fig:
+                st.pyplot(fig)
+        else:
+            st.warning("PAE file not found for this model")
 
     # Download section
     st.divider()
@@ -543,7 +648,7 @@ def render_viewer_page(results_df: pd.DataFrame):
         st.divider()
         with st.expander("Interface details (AlphaJudge)", expanded=False):
             download_df = model_interfaces.reset_index(drop=True)
-            st.dataframe(download_df, use_container_width=True)
+            st.dataframe(download_df, width="stretch")
             csv_data = download_df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download interfaces CSV (model)",
