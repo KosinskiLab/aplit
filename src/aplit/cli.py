@@ -3,6 +3,7 @@ Command-line interface for APLit
 """
 
 import sys
+import os
 import argparse
 import subprocess
 
@@ -90,6 +91,11 @@ For more information, visit: https://github.com/KosinskiLab/aplit
             sys.exit(1)
         cmd.extend(["--", "--directory", args.directory])
 
+    # Prepare environment
+    env = os.environ.copy()
+    if args.directory:
+        env["APLIT_DEFAULT_DIRECTORY"] = str(Path(args.directory).resolve())
+
     # Print startup message
     print("=" * 70)
     print("APLit - AlphaPulldown Structure Viewer")
@@ -103,7 +109,7 @@ For more information, visit: https://github.com/KosinskiLab/aplit
 
     # Run streamlit
     try:
-        subprocess.run(cmd)
+        subprocess.run(cmd, env=env)
     except KeyboardInterrupt:
         print("\n\nServer stopped.")
         sys.exit(0)

@@ -2,13 +2,16 @@
 Utility functions and data classes for AlphaPulldown analysis
 """
 
+import csv
 import json
+import math
 
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
+from pandas.errors import EmptyDataError
 
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -19,6 +22,169 @@ class AlphaPulldownAnalyzer:
 
     def __init__(self, output_dir: str):
         self.output_dir = Path(output_dir)
+        self._job_cache: Dict[Path, Dict[str, Any]] = {}
+
+    @staticmethod
+    def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+        try:
+            if value is None:
+                return default
+            val = float(value)
+            if math.isnan(val):
+                return default
+            return val
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _select_best_interface_row(df: pd.DataFrame) -> Optional[pd.Series]:
+        """Return the interface row with the highest ipTM (fallback to ipTM+PTM)."""
+        if df is None or df.empty:
+            return None
+
+        working_df = df.copy()
+        for col in ["iptm", "iptm_ptm"]:
+            if col in working_df.columns:
+                working_df[col] = pd.to_numeric(working_df[col], errors="coerce")
+
+        sort_cols = [col for col in ["iptm", "iptm_ptm"] if col in working_df.columns]
+        if sort_cols:
+            working_df = working_df.sort_values(
+                sort_cols, ascending=False, na_position="last"
+            )
+
+        try:
+            best_idx = working_df.index[0]
+        except IndexError:
+            return None
+        return df.loc[best_idx]
+
+    def _detect_job_type(self, job_dir: Path) -> Optional[str]:
+        if (job_dir / "ranking_debug.json").exists():
+            return "af2"
+        if (job_dir / "ranking_scores.csv").exists():
+            return "af3"
+        return None
+
+    def _load_af2_models(self, job_dir: Path) -> List[Dict[str, Any]]:
+        ranking_file = job_dir / "ranking_debug.json"
+        if not ranking_file.exists():
+            return []
+
+        with ranking_file.open() as f:
+            ranking_data = json.load(f)
+
+        order = ranking_data.get("order", [])
+        models: List[Dict[str, Any]] = []
+        for rank_idx, model_name in enumerate(order):
+            structure_path = job_dir / f"ranked_{rank_idx}.pdb"
+            models.append(
+                {
+                    "rank": rank_idx,
+                    "model_name": model_name,
+                    "iptm": ranking_data.get("iptm", {}).get(model_name, 0.0),
+                    "iptm_ptm": ranking_data.get("iptm+ptm", {}).get(model_name, 0.0),
+                    "ptm": ranking_data.get("ptm", {}).get(model_name),
+                    "structure_file": structure_path,
+                    "structure_format": "pdb",
+                    "pdb_file": structure_path,
+                    "job_type": "af2",
+                }
+            )
+        return models
+
+    def _load_af3_models(self, job_dir: Path) -> List[Dict[str, Any]]:
+        ranking_path = job_dir / "ranking_scores.csv"
+        if not ranking_path.exists():
+            return []
+
+        with ranking_path.open(newline="") as f:
+            rows = [row for row in csv.DictReader(f) if row]
+
+        def score(row: Dict[str, Any]) -> float:
+            val = self._safe_float(row.get("ranking_score"), float("-inf"))
+            return val if val is not None else float("-inf")
+
+        rows.sort(key=score, reverse=True)
+
+        models: List[Dict[str, Any]] = []
+        for rank_idx, row in enumerate(rows):
+            seed = row.get("seed")
+            sample = row.get("sample")
+            if seed is None or sample is None:
+                continue
+
+            model_name = f"seed-{seed}_sample-{sample}"
+            model_dir = job_dir / model_name
+            summary_path = model_dir / "summary_confidences.json"
+            summary: Dict[str, Any] = {}
+
+            if not summary_path.exists():
+                fallback_summary = job_dir / f"ranked_{rank_idx}_summary_confidences.json"
+                if fallback_summary.exists():
+                    summary_path = fallback_summary
+
+            if summary_path.exists():
+                try:
+                    with summary_path.open() as f:
+                        summary = json.load(f)
+                except Exception as exc:
+                    st.warning(f"Could not read {summary_path}: {exc}")
+
+            iptm = self._safe_float(summary.get("iptm"), 0.0)
+            ptm = self._safe_float(summary.get("ptm"))
+            iptm_ptm = self._safe_float(
+                summary.get("ranking_score")
+                or summary.get("iptm+ptm")
+                or row.get("ranking_score"),
+                0.0,
+            )
+
+            structure_path = model_dir / "model.cif"
+            if not structure_path.exists():
+                ranked_alt = job_dir / f"ranked_{rank_idx}_model.cif"
+                if ranked_alt.exists():
+                    structure_path = ranked_alt
+                else:
+                    pdb_alt = job_dir / f"ranked_{rank_idx}.pdb"
+                    if pdb_alt.exists():
+                        structure_path = pdb_alt
+            suffix = structure_path.suffix.lower()
+            structure_format = "mmcif" if suffix in {".cif", ".mmcif"} else "pdb"
+
+            models.append(
+                {
+                    "rank": rank_idx,
+                    "model_name": model_name,
+                    "iptm": iptm if iptm is not None else 0.0,
+                    "iptm_ptm": iptm_ptm if iptm_ptm is not None else 0.0,
+                    "ptm": ptm,
+                    "structure_file": structure_path,
+                    "structure_format": structure_format,
+                    "pdb_file": structure_path,
+                    "job_type": "af3",
+                    "confidence_score": self._safe_float(summary.get("confidence_score")),
+                }
+            )
+
+        return models
+
+    def _get_job_models(self, job_dir: Path) -> Optional[Dict[str, Any]]:
+        job_dir = job_dir.resolve()
+        if job_dir in self._job_cache:
+            return self._job_cache[job_dir]
+
+        job_type = self._detect_job_type(job_dir)
+        if job_type == "af2":
+            models = self._load_af2_models(job_dir)
+        elif job_type == "af3":
+            models = self._load_af3_models(job_dir)
+        else:
+            models = []
+
+        info = {"job_type": job_type, "models": models}
+        self._job_cache[job_dir] = info
+        return info if job_type else None
 
     def obtain_seq_lengths(self, result_dir: Path) -> List[int]:
         """Extract sequence lengths from PDB file by counting chains"""
@@ -83,26 +249,10 @@ class AlphaPulldownAnalyzer:
     def get_all_models(self, result_dir: Path) -> List[Dict]:
         """Get information about all models in a prediction directory"""
         try:
-            ranking_file = result_dir / "ranking_debug.json"
-            if not ranking_file.exists():
+            info = self._get_job_models(result_dir)
+            if not info:
                 return []
-
-            with open(ranking_file, "r") as f:
-                ranking_data = json.load(f)
-
-            models = []
-            for rank_idx, model_name in enumerate(ranking_data["order"]):
-                model_info = {
-                    "rank": rank_idx,
-                    "model_name": model_name,
-                    "iptm": ranking_data.get("iptm", {}).get(model_name, 0.0),
-                    "iptm_ptm": ranking_data.get("iptm+ptm", {}).get(model_name, 0.0),
-                    "pdb_file": result_dir / f"ranked_{rank_idx}.pdb",
-                }
-                models.append(model_info)
-
-            return models
-
+            return info.get("models", [])
         except Exception as e:
             st.warning(f"Could not load models from {result_dir}: {e}")
             return []
@@ -118,31 +268,52 @@ class AlphaPulldownAnalyzer:
         for idx, job_dir in enumerate(jobs):
             status_text.text(f"Processing {job_dir.name} ({idx + 1}/{len(jobs)})")
 
-            ranking_file = job_dir / "ranking_debug.json"
-            if not ranking_file.exists():
-                continue
-
             try:
-                with open(ranking_file, "r") as f:
-                    ranking_data = json.load(f)
-
-                # Check if it's a multimer job
-                if "iptm+ptm" not in ranking_data:
+                job_info = self._get_job_models(job_dir)
+                if not job_info or not job_info.get("models"):
                     continue
 
-                best_model = ranking_data["order"][0]
-                iptm_ptm_score = ranking_data["iptm+ptm"][best_model]
-                iptm_score = ranking_data.get("iptm", {}).get(best_model, 0.0)
+                models = job_info["models"]
+                job_type = job_info["job_type"]
 
-                # Get PAE matrix for inter-chain PAE calculation
-                pae_mtx, _ = self.obtain_pae_and_iptm(job_dir, best_model)
+                best_model_info = models[0]
+                best_model = best_model_info["model_name"]
+                iptm_ptm_score = best_model_info.get("iptm_ptm", 0.0) or 0.0
+                iptm_score = best_model_info.get("iptm", 0.0) or 0.0
 
-                # Calculate mean inter-chain PAE if available
                 mean_pae = None
-                if pae_mtx is not None:
-                    seq_lengths = self.obtain_seq_lengths(job_dir)
-                    if seq_lengths:
-                        mean_pae = self.calculate_mean_inter_pae(pae_mtx, seq_lengths)
+                if job_type == "af2":
+                    pae_mtx, _ = self.obtain_pae_and_iptm(job_dir, best_model)
+                    if pae_mtx is not None:
+                        seq_lengths = self.obtain_seq_lengths(job_dir)
+                        if seq_lengths:
+                            mean_pae = self.calculate_mean_inter_pae(
+                                pae_mtx, seq_lengths
+                            )
+
+                interface_df = load_interfaces_csv(job_dir)
+                interface_summary = (
+                    self._select_best_interface_row(interface_df)
+                    if interface_df is not None
+                    else None
+                )
+
+                if interface_summary is not None:
+                    iptm_score = (
+                        float(interface_summary.get("iptm"))
+                        if pd.notna(interface_summary.get("iptm"))
+                        else iptm_score
+                    )
+                    iptm_ptm_score = (
+                        float(interface_summary.get("iptm_ptm"))
+                        if pd.notna(interface_summary.get("iptm_ptm"))
+                        else iptm_ptm_score
+                    )
+                    mean_pae = (
+                        float(interface_summary.get("average_interface_pae"))
+                        if pd.notna(interface_summary.get("average_interface_pae"))
+                        else mean_pae
+                    )
 
                 results.append(
                     {
@@ -152,7 +323,30 @@ class AlphaPulldownAnalyzer:
                         "mean_pae": mean_pae,
                         "best_model": best_model,
                         "path": str(job_dir),
-                        "n_models": len(ranking_data["order"]),
+                        "n_models": len(models),
+                        "job_type": job_type,
+                        "ptm": float(interface_summary.get("ptm"))
+                        if interface_summary is not None
+                        and pd.notna(interface_summary.get("ptm"))
+                        else None,
+                        "confidence_score": float(
+                            interface_summary.get("confidence_score")
+                        )
+                        if interface_summary is not None
+                        and pd.notna(interface_summary.get("confidence_score"))
+                        else None,
+                        "global_dockq": float(
+                            interface_summary.get("pDockQ/mpDockQ")
+                        )
+                        if interface_summary is not None
+                        and pd.notna(interface_summary.get("pDockQ/mpDockQ"))
+                        else None,
+                        "interface_csv": str(job_dir / "interfaces.csv")
+                        if interface_df is not None
+                        else None,
+                        "interface_summary_model": interface_summary.get("model_used")
+                        if interface_summary is not None
+                        else None,
                     }
                 )
 
@@ -247,12 +441,16 @@ def plot_model_comparison(models: List[Dict]) -> plt.Figure:
 
 
 def create_3dmol_view(
-    pdb_file: Path, color_by: str = "plddt", width: int = 800, height: int = 600
+    structure_file: Path,
+    color_by: str = "plddt",
+    structure_format: str = "pdb",
+    width: int = 800,
+    height: int = 600,
 ) -> str:
     """Create HTML for 3Dmol.js viewer"""
     try:
-        with open(pdb_file, "r") as f:
-            pdb_data = f.read()
+        with open(structure_file, "r") as f:
+            structure_data = f.read()
 
         # Color schemes
         if color_by == "plddt":
@@ -271,6 +469,13 @@ def create_3dmol_view(
                 viewer.setStyle({}, {cartoon: {colorscheme: 'chain'}});
             """
 
+        data_literal = json.dumps(structure_data)
+        model_format = (
+            "mmcif"
+            if structure_format.lower() in {"mmcif", "cif"}
+            else structure_format.lower()
+        )
+
         html = f"""
         <div id="container" style="width: 100%; height: {height}px; position: relative;"></div>
         <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
@@ -279,9 +484,9 @@ def create_3dmol_view(
                 backgroundColor: 'white'
             }});
 
-            let pdbData = `{pdb_data}`;
+            let pdbData = {data_literal};
 
-            viewer.addModel(pdbData, "pdb");
+            viewer.addModel(pdbData, "{model_format}");
             {color_scheme}
             viewer.zoomTo();
             viewer.render();
@@ -307,5 +512,53 @@ def get_pae_file_for_model(job_path: Path, model_name: str) -> Optional[Path]:
     pae_file = job_path / f"pae_model_{model_num}.json"
     if pae_file.exists():
         return pae_file
+
+    return None
+
+
+def load_interfaces_csv(job_path: Path) -> Optional[pd.DataFrame]:
+    """Load AlphaJudge interfaces.csv if it exists and is non-empty."""
+    csv_path = job_path / "interfaces.csv"
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        return None
+
+    try:
+        df = pd.read_csv(csv_path)
+        if df.empty:
+            return None
+        return df
+    except EmptyDataError:
+        return None
+    except Exception as e:
+        st.warning(f"Could not load interfaces.csv from {job_path}: {e}")
+        return None
+
+
+def get_pae_plot_image(job_path: Path, model_name: str, rank: int) -> Optional[Path]:
+    """Locate a precomputed PAE PNG image."""
+
+    def _candidate_exists(path: Path) -> Optional[Path]:
+        return path if path.exists() else None
+
+    candidates = [
+        job_path / f"pae_{model_name}.png",
+        job_path / f"pae_plot_ranked_{rank}.png",
+        job_path / f"pae_plot_ranked_{rank}.PNG",
+    ]
+
+    # Try a simplified model identifier if possible
+    if "_" in model_name:
+        model_num = model_name.split("_")[1]
+        candidates.extend(
+            [
+                job_path / f"pae_model_{model_num}.png",
+                job_path / f"pae_model_{model_num}_ptm_pred_0.png",
+            ]
+        )
+
+    for candidate in candidates:
+        existing = _candidate_exists(candidate)
+        if existing:
+            return existing
 
     return None

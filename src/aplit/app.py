@@ -3,11 +3,14 @@
 AlphaPulldown Structure Viewer - Web Application
 """
 
+import argparse
+import os
+import time
+from pathlib import Path
+
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
-from pathlib import Path
-import time
 
 from utils import (
     AlphaPulldownAnalyzer,
@@ -15,6 +18,8 @@ from utils import (
     plot_model_comparison,
     create_3dmol_view,
     get_pae_file_for_model,
+    load_interfaces_csv,
+    get_pae_plot_image,
 )
 
 # Set page config
@@ -70,6 +75,21 @@ def initialize_session_state():
         st.session_state.selected_job = None
     if "results_df" not in st.session_state:
         st.session_state.results_df = None
+
+
+def get_default_directory() -> str:
+    """Derive default directory from CLI arguments or environment variables."""
+    env_dir = os.environ.get("APLIT_DEFAULT_DIRECTORY", "")
+    if env_dir:
+        return env_dir
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--directory", type=str, default="")
+    try:
+        args, _ = parser.parse_known_args()
+        return args.directory
+    except SystemExit:
+        return ""
 
 
 def navigate_to_viewer(job_name: str):
@@ -361,6 +381,16 @@ def render_viewer_page(results_df: pd.DataFrame):
     )
 
     selected_model = models[selected_model_idx]
+    pae_file = get_pae_file_for_model(job_path, selected_model["model_name"])
+    pae_image = get_pae_plot_image(
+        job_path, selected_model["model_name"], selected_model["rank"]
+    )
+    interfaces_df = load_interfaces_csv(job_path)
+    model_interfaces = (
+        interfaces_df[interfaces_df["model_used"] == selected_model["model_name"]]
+        if interfaces_df is not None and "model_used" in interfaces_df.columns
+        else None
+    )
 
     st.divider()
 
@@ -375,6 +405,64 @@ def render_viewer_page(results_df: pd.DataFrame):
     with col4:
         st.metric("Total Models", len(models))
 
+    if model_interfaces is not None and not model_interfaces.empty:
+        iface_numeric = model_interfaces.copy()
+        for col in [
+            "interface_pDockQ2",
+            "interface_score",
+            "average_interface_pae",
+            "pDockQ/mpDockQ",
+        ]:
+            if col in iface_numeric.columns:
+                iface_numeric[col] = pd.to_numeric(
+                    iface_numeric[col], errors="coerce"
+                )
+        sort_columns = [
+            col
+            for col in [
+                "interface_pDockQ2",
+                "interface_score",
+                "average_interface_pae",
+            ]
+            if col in iface_numeric.columns
+        ]
+        if sort_columns:
+            ascending_flags = [
+                True if col == "average_interface_pae" else False
+                for col in sort_columns
+            ]
+            best_iface = iface_numeric.sort_values(
+                by=sort_columns,
+                ascending=ascending_flags,
+                na_position="last",
+            ).iloc[0]
+        else:
+            best_iface = iface_numeric.iloc[0]
+
+        st.success("AlphaJudge interface scores available for this model.")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            if "pDockQ/mpDockQ" in best_iface and pd.notna(best_iface["pDockQ/mpDockQ"]):
+                st.metric("Global DockQ", f"{float(best_iface['pDockQ/mpDockQ']):.3f}")
+        with col_b:
+            if (
+                "interface_pDockQ2" in best_iface
+                and pd.notna(best_iface["interface_pDockQ2"])
+            ):
+                st.metric(
+                    "Best interface pDockQ2",
+                    f"{float(best_iface['interface_pDockQ2']):.3f}",
+                )
+        with col_c:
+            if (
+                "average_interface_pae" in best_iface
+                and pd.notna(best_iface["average_interface_pae"])
+            ):
+                st.metric(
+                    "Avg interface PAE (Å)",
+                    f"{float(best_iface['average_interface_pae']):.2f}",
+                )
+
     # Model comparison
     with st.expander("📊 Compare all models", expanded=False):
         fig = plot_model_comparison(models)
@@ -387,45 +475,53 @@ def render_viewer_page(results_df: pd.DataFrame):
     tab1, tab2, tab3 = st.tabs(["PAE Plot", "Structure (pLDDT)", "Structure (Chains)"])
 
     with tab1:
-        pae_file = get_pae_file_for_model(job_path, selected_model["model_name"])
-        if pae_file:
-            # Make PAE plot responsive - use container width
+        if pae_image:
+            st.image(str(pae_image), use_column_width=True)
+        elif pae_file:
             fig = plot_pae_heatmap(pae_file, figsize=(10, 10))
             if fig:
-                st.pyplot(
-                    fig,
-                    # width="stretch",
-                )
+                st.pyplot(fig)
         else:
             st.warning("PAE file not found for this model")
 
+    structure_file = selected_model.get("structure_file") or selected_model.get("pdb_file")
+    structure_format = selected_model.get("structure_format", "pdb")
+
     with tab2:
-        pdb_file = selected_model["pdb_file"]
-        if pdb_file.exists():
-            html = create_3dmol_view(pdb_file, color_by="plddt", height=600)
+        if structure_file and structure_file.exists():
+            html = create_3dmol_view(
+                structure_file,
+                color_by="plddt",
+                structure_format=structure_format,
+                height=600,
+            )
             components.html(html, height=650)
         else:
-            st.warning("PDB file not found")
+            st.warning("Structure file not found")
 
     with tab3:
-        pdb_file = selected_model["pdb_file"]
-        if pdb_file.exists():
-            html = create_3dmol_view(pdb_file, color_by="chain", height=600)
+        if structure_file and structure_file.exists():
+            html = create_3dmol_view(
+                structure_file,
+                color_by="chain",
+                structure_format=structure_format,
+                height=600,
+            )
             components.html(html, height=650)
         else:
-            st.warning("PDB file not found")
+            st.warning("Structure file not found")
 
     # Download section
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        if pdb_file.exists():
-            with open(pdb_file, "rb") as f:
+        if structure_file and structure_file.exists():
+            with open(structure_file, "rb") as f:
                 st.download_button(
-                    "Download PDB",
+                    "Download structure",
                     f,
-                    file_name=f"{selected_job}_rank_{selected_model['rank']}.pdb",
-                    mime="chemical/x-pdb",
+                    file_name=f"{selected_job}_rank_{selected_model['rank']}{structure_file.suffix}",
+                    mime="chemical/x-pdb" if structure_format == "pdb" else "chemical/x-mmcif",
                     width="stretch",
                 )
     with col2:
@@ -439,13 +535,30 @@ def render_viewer_page(results_df: pd.DataFrame):
                     width="stretch",
                 )
 
+    if (
+        interfaces_df is not None
+        and not interfaces_df.empty
+        and model_interfaces is not None
+    ):
+        st.divider()
+        with st.expander("Interface details (AlphaJudge)", expanded=False):
+            download_df = model_interfaces.reset_index(drop=True)
+            st.dataframe(download_df, use_container_width=True)
+            csv_data = download_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download interfaces CSV (model)",
+                csv_data,
+                file_name=f"{selected_job}_{selected_model['model_name']}_interfaces.csv",
+                mime="text/csv",
+            )
+
 
 def main():
     """Main application"""
     initialize_session_state()
 
     # Default directory (can be overridden by sidebar)
-    default_dir = ""
+    default_dir = get_default_directory()
 
     # Render sidebar and get configuration
     directory, auto_refresh, refresh_interval = render_sidebar(default_dir)
