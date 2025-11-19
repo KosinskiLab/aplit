@@ -3,6 +3,7 @@ Command-line interface for APLit
 """
 
 import sys
+import os
 import argparse
 import subprocess
 
@@ -48,14 +49,24 @@ For more information, visit: https://github.com/KosinskiLab/aplit
     parser.add_argument(
         "--browser",
         action="store_true",
-        help="Automatically open browser (default: True for local, False for remote)",
+        help="Force opening a browser (disable headless mode).",
     )
 
     parser.add_argument(
-        "--no-browser", action="store_true", help="Do not automatically open browser"
+        "--no-browser",
+        action="store_true",
+        help="Force headless mode (never open a browser).",
     )
 
     args = parser.parse_args()
+
+    if args.browser and args.no_browser:
+        print("Error: use only one of --browser / --no-browser", file=sys.stderr)
+        sys.exit(2)
+
+    if not (1 <= args.port <= 65535):
+        print(f"Error: invalid port {args.port}", file=sys.stderr)
+        sys.exit(2)
 
     # Get the path to app.py
     app_path = Path(__file__).parent / "app.py"
@@ -90,6 +101,11 @@ For more information, visit: https://github.com/KosinskiLab/aplit
             sys.exit(1)
         cmd.extend(["--", "--directory", args.directory])
 
+    # Prepare environment
+    env = os.environ.copy()
+    if args.directory:
+        env["APLIT_DEFAULT_DIRECTORY"] = str(Path(args.directory).resolve())
+
     # Print startup message
     print("=" * 70)
     print("APLit - AlphaPulldown Structure Viewer")
@@ -103,7 +119,7 @@ For more information, visit: https://github.com/KosinskiLab/aplit
 
     # Run streamlit
     try:
-        subprocess.run(cmd)
+        subprocess.run(cmd, env=env, check=True)
     except KeyboardInterrupt:
         print("\n\nServer stopped.")
         sys.exit(0)
