@@ -3,7 +3,6 @@
 AlphaPulldown Structure Viewer - Web Application
 """
 
-import argparse
 import math
 import os
 import time
@@ -80,18 +79,8 @@ def initialize_session_state():
 
 
 def get_default_directory() -> str:
-    """Derive default directory from CLI arguments or environment variables."""
-    env_dir = os.environ.get("APLIT_DEFAULT_DIRECTORY", "")
-    if env_dir:
-        return env_dir
-
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--directory", type=str, default="")
-    try:
-        args, _ = parser.parse_known_args()
-        return args.directory
-    except SystemExit:
-        return ""
+    """Derive default directory from environment variables."""
+    return os.environ.get("APLIT_DEFAULT_DIRECTORY", "")
 
 
 def navigate_to_viewer(job_name: str):
@@ -118,14 +107,14 @@ def render_sidebar(output_dir: str):
     st.sidebar.subheader("Navigation")
     if st.sidebar.button(
         "← Overview",
-        width="stretch",
+        use_container_width=True,
     ):
         st.session_state.current_page = "overview"
         st.rerun()
 
     if st.sidebar.button(
         "Structure Viewer →",
-        width="stretch",
+        use_container_width=True,
         disabled=st.session_state.selected_job is None,
     ):
         st.session_state.current_page = "viewer"
@@ -142,7 +131,7 @@ def render_sidebar(output_dir: str):
 
     if st.sidebar.button(
         "Refresh Now",
-        width="stretch",
+        use_container_width=True,
     ):
         st.cache_data.clear()
         st.rerun()
@@ -199,13 +188,10 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
             slider_max_pae, math.ceil(max_found_pae / 5.0) * 5.0
         )
 
-    if "pae_filter" in st.session_state:
-        st.session_state.pae_filter = min(st.session_state.pae_filter, slider_max_pae)
-
     with col3:
         default_pae = slider_max_pae if slider_max_pae > max_pae else max_pae
         max_pae = st.slider(
-            "Maximum mean PAE (Å)",
+            "Maximum mean PAE",
             0.0,
             slider_max_pae,
             default_pae,
@@ -303,6 +289,9 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
     st.subheader(f"Predictions ({len(filtered_df)} results)")
 
     # Prepare display dataframe
+    def tooltip(label: str, full: str) -> str:
+        return f"<span title='{full}'>{label}</span>"
+
     column_specs = [
         {"key": "job", "label": "Job", "width": 3},
         {"key": "iptm", "label": "ipTM", "width": 1},
@@ -310,9 +299,24 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
     ]
     if "mean_pae" in filtered_df.columns:
         column_specs.append({"key": "mean_pae", "label": "Mean PAE (Å)", "width": 1})
-    for col in ["global_dockq", "best_interface_ipsae", "best_interface_lis"]:
-        if col in filtered_df.columns:
-            column_specs.append({"key": col, "label": col, "width": 1})
+    alphajudge_columns = [
+        ("global_dockq", tooltip("DockQ", "Global DockQ score")),
+        ("best_interface_pdockq2", tooltip("pDQ2", "Best interface pDockQ2")),
+        ("best_interface_ipsae", tooltip("ipSAE", "Best interface ipSAE")),
+        ("best_interface_lis", tooltip("LIS", "Best interface LIS")),
+        ("interface_score", tooltip("Score", "Interface score")),
+        ("interface_average_plddt", tooltip("pLDDT", "Interface average pLDDT")),
+        ("interface_residue_count", tooltip("Res", "Interface residues")),
+        ("interface_contact_pairs", tooltip("Pairs", "Interface contact pairs")),
+        ("interface_area", tooltip("Area", "Interface area (Å²)")),
+        ("interface_solv_energy", tooltip("SolvE", "Interface solvation energy")),
+        ("interface_polar_fraction", tooltip("Polar", "Interface polar fraction")),
+        ("interface_hydrophobic_fraction", tooltip("Hydro", "Interface hydrophobic fraction")),
+        ("interface_charged_fraction", tooltip("Charged", "Interface charged fraction")),
+    ]
+    for key, label in alphajudge_columns:
+        if key in filtered_df.columns and filtered_df[key].notna().any():
+            column_specs.append({"key": key, "label": label, "width": 1})
     column_specs.append({"key": "n_models", "label": "Models", "width": 1})
 
     display_keys = [spec["key"] for spec in column_specs]
@@ -329,9 +333,19 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
     }
     .table-header {
         background-color: #f8f9fa;
-        padding: 12px;
+        padding: 10px 6px;
         font-weight: 600;
         border-bottom: 2px solid #dee2e6;
+        white-space: nowrap;
+        text-align: center;
+        font-size: 0.9rem;
+    }
+    .table-header span {
+        display: block;
+        width: 100%;
+        cursor: help;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .table-row {
         border-bottom: 1px solid #e9ecef;
@@ -378,7 +392,9 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
                 with col:
                     if key == "job":
                         if st.button(
-                            job_name, key=f"job_{job_name}_{idx}", width="stretch"
+                            job_name,
+                            key=f"job_{job_name}_{idx}",
+                            use_container_width=True,
                         ):
                             navigate_to_viewer(job_name)
                     elif key == "iptm":
@@ -413,6 +429,56 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
                             st.write(f"{row['best_interface_lis']:.3f}")
                         else:
                             st.write("N/A")
+                    elif key == "best_interface_pdockq2":
+                        if pd.notna(row["best_interface_pdockq2"]):
+                            st.write(f"{row['best_interface_pdockq2']:.3f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_score":
+                        if pd.notna(row["interface_score"]):
+                            st.write(f"{row['interface_score']:.1f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_average_plddt":
+                        if pd.notna(row["interface_average_plddt"]):
+                            st.write(f"{row['interface_average_plddt']:.1f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_residue_count":
+                        if pd.notna(row["interface_residue_count"]):
+                            st.write(f"{int(row['interface_residue_count'])}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_contact_pairs":
+                        if pd.notna(row["interface_contact_pairs"]):
+                            st.write(f"{int(row['interface_contact_pairs'])}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_area":
+                        if pd.notna(row["interface_area"]):
+                            st.write(f"{row['interface_area']:.0f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_solv_energy":
+                        if pd.notna(row["interface_solv_energy"]):
+                            st.write(f"{row['interface_solv_energy']:.1f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_polar_fraction":
+                        if pd.notna(row["interface_polar_fraction"]):
+                            st.write(f"{row['interface_polar_fraction']:.2f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_hydrophobic_fraction":
+                        if pd.notna(row["interface_hydrophobic_fraction"]):
+                            st.write(f"{row['interface_hydrophobic_fraction']:.2f}")
+                        else:
+                            st.write("N/A")
+                    elif key == "interface_charged_fraction":
+                        if pd.notna(row["interface_charged_fraction"]):
+                            st.write(f"{row['interface_charged_fraction']:.2f}")
+                        else:
+                            st.write("N/A")
                     elif key == "n_models":
                         st.write(f"{row['n_models']}")
 
@@ -435,7 +501,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
             csv,
             file_name="predictions.csv",
             mime="text/csv",
-            width="stretch",
+            use_container_width=True,
         )
 
 
@@ -472,7 +538,11 @@ def render_viewer_page(results_df: pd.DataFrame):
         selected_job = st.selectbox("Select prediction", job_list, index=default_idx)
     with next_col:
         st.markdown('<div class="next-pred-btn">', unsafe_allow_html=True)
-        if st.button("Next prediction →", key="next_prediction_button", width="stretch"):
+        if st.button(
+            "Next prediction →",
+            key="next_prediction_button",
+            use_container_width=True,
+        ):
             next_idx = (job_list.index(selected_job) + 1) % len(job_list)
             st.session_state.selected_job = job_list[next_idx]
             st.rerun()
@@ -559,28 +629,41 @@ def render_viewer_page(results_df: pd.DataFrame):
             best_iface = iface_numeric.iloc[0]
 
         st.success("AlphaJudge interface scores available for this model.")
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            if "pDockQ/mpDockQ" in best_iface and pd.notna(best_iface["pDockQ/mpDockQ"]):
-                st.metric("Global DockQ", f"{float(best_iface['pDockQ/mpDockQ']):.3f}")
-        with col_b:
-            if (
-                "interface_pDockQ2" in best_iface
-                and pd.notna(best_iface["interface_pDockQ2"])
-            ):
-                st.metric(
-                    "Best interface pDockQ2",
-                    f"{float(best_iface['interface_pDockQ2']):.3f}",
-                )
-        with col_c:
-            if (
-                "average_interface_pae" in best_iface
-                and pd.notna(best_iface["average_interface_pae"])
-            ):
-                st.metric(
-                    "Avg interface PAE (Å)",
-                    f"{float(best_iface['average_interface_pae']):.2f}",
-                )
+        metric_specs = [
+            ("Global DockQ", "pDockQ/mpDockQ", lambda v: f"{float(v):.3f}"),
+            ("Best interface pDockQ2", "interface_pDockQ2", lambda v: f"{float(v):.3f}"),
+            ("Best interface ipSAE", "interface_ipSAE", lambda v: f"{float(v):.3f}"),
+            ("Best interface LIS", "interface_LIS", lambda v: f"{float(v):.3f}"),
+            ("Interface score", "interface_score", lambda v: f"{float(v):.1f}"),
+            ("Interface avg pLDDT", "interface_average_plddt", lambda v: f"{float(v):.1f}"),
+            ("Interface residues", "interface_num_intf_residues", lambda v: f"{int(v)}"),
+            ("Contact pairs", "interface_contact_pairs", lambda v: f"{int(v)}"),
+            ("Interface area (Å²)", "interface_area", lambda v: f"{float(v):.0f}"),
+            (
+                "Interface solvation energy",
+                "interface_solv_en",
+                lambda v: f"{float(v):.1f}",
+            ),
+            ("Avg interface PAE (Å)", "average_interface_pae", lambda v: f"{float(v):.2f}"),
+            ("Interface polar fraction", "interface_polar", lambda v: f"{float(v):.2f}"),
+            (
+                "Interface hydrophobic fraction",
+                "interface_hydrophobic",
+                lambda v: f"{float(v):.2f}",
+            ),
+            ("Interface charged fraction", "interface_charged", lambda v: f"{float(v):.2f}"),
+        ]
+
+        metrics_data = []
+        for label, key, formatter in metric_specs:
+            if key in best_iface and pd.notna(best_iface[key]):
+                metrics_data.append((label, formatter(best_iface[key])))
+
+        for start in range(0, len(metrics_data), 3):
+            cols = st.columns(3)
+            for col, (label, value) in zip(cols, metrics_data[start : start + 3]):
+                with col:
+                    st.metric(label, value)
 
     # Model comparison
     with st.expander("📊 Compare all models", expanded=False):
@@ -622,7 +705,7 @@ def render_viewer_page(results_df: pd.DataFrame):
 
     with tab3:
         if pae_image:
-            st.image(str(pae_image), width="stretch")
+            st.image(str(pae_image), use_container_width=True)
         elif pae_file:
             fig = plot_pae_heatmap(pae_file, figsize=(10, 10))
             if fig:
@@ -641,7 +724,7 @@ def render_viewer_page(results_df: pd.DataFrame):
                     f,
                     file_name=f"{selected_job}_rank_{selected_model['rank']}{structure_file.suffix}",
                     mime="chemical/x-pdb" if structure_format == "pdb" else "chemical/x-mmcif",
-                    width="stretch",
+                    use_container_width=True,
                 )
     with col2:
         if pae_file:
@@ -651,7 +734,7 @@ def render_viewer_page(results_df: pd.DataFrame):
                     f,
                     file_name=f"{selected_job}_rank_{selected_model['rank']}_pae.json",
                     mime="application/json",
-                    width="stretch",
+                    use_container_width=True,
                 )
 
     if (
@@ -662,7 +745,7 @@ def render_viewer_page(results_df: pd.DataFrame):
         st.divider()
         with st.expander("Interface details (AlphaJudge)", expanded=False):
             download_df = model_interfaces.reset_index(drop=True)
-            st.dataframe(download_df, width="stretch")
+            st.dataframe(download_df, use_container_width=True)
             csv_data = download_df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download interfaces CSV (model)",

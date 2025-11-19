@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import re
+import uuid
 
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -23,7 +24,7 @@ class AlphaPulldownAnalyzer:
 
     def __init__(self, output_dir: str):
         self.output_dir = Path(output_dir)
-        self._job_cache: Dict[Path, Dict[str, Any]] = {}
+        self._job_cache: Dict[Path, Optional[Dict[str, Any]]] = {}
 
     @staticmethod
     def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
@@ -143,7 +144,9 @@ class AlphaPulldownAnalyzer:
             if not rows:
                 ranked_summaries = sorted(job_dir.glob("ranked_*_summary_confidences.json"))
                 for path in ranked_summaries:
-                    rank_match = re.match(r"ranked_(\d+)_summary_confidences\\.json", path.name)
+                    rank_match = re.match(
+                        r"ranked_(\d+)_summary_confidences\.json", path.name
+                    )
                     rank_idx = int(rank_match.group(1)) if rank_match else 0
                     row = {
                         "seed": f"ranked_{rank_idx}",
@@ -250,16 +253,18 @@ class AlphaPulldownAnalyzer:
             return self._job_cache[job_dir]
 
         job_type = self._detect_job_type(job_dir)
+        if job_type is None:
+            self._job_cache[job_dir] = None
+            return None
+
         if job_type == "af2":
             models = self._load_af2_models(job_dir)
-        elif job_type == "af3":
-            models = self._load_af3_models(job_dir)
         else:
-            models = []
+            models = self._load_af3_models(job_dir)
 
         info = {"job_type": job_type, "models": models}
         self._job_cache[job_dir] = info
-        return info if job_type else None
+        return info
 
     def obtain_seq_lengths(self, result_dir: Path) -> List[int]:
         """Extract sequence lengths from PDB file by counting chains"""
@@ -334,7 +339,7 @@ class AlphaPulldownAnalyzer:
 
     def analyze_directory(self) -> pd.DataFrame:
         """Analyze all prediction jobs in the directory"""
-        jobs = [d for d in self.output_dir.iterdir() if d.is_dir()]
+        jobs = sorted(d for d in self.output_dir.iterdir() if d.is_dir())
 
         results = []
         progress_bar = st.progress(0)
@@ -373,57 +378,61 @@ class AlphaPulldownAnalyzer:
                     else None
                 )
 
+                interface_metrics: Dict[str, Optional[float]] = {}
                 if interface_summary is not None:
-                    iptm_score = (
-                        float(interface_summary.get("iptm"))
-                        if pd.notna(interface_summary.get("iptm"))
-                        else iptm_score
-                    )
-                    iptm_ptm_score = (
-                        float(interface_summary.get("iptm_ptm"))
-                        if pd.notna(interface_summary.get("iptm_ptm"))
-                        else iptm_ptm_score
-                    )
-                    mean_pae = (
-                        float(interface_summary.get("average_interface_pae"))
-                        if pd.notna(interface_summary.get("average_interface_pae"))
-                        else mean_pae
-                    )
-
-                results.append(
-                    {
-                        "job": job_dir.name,
-                        "iptm_ptm": iptm_ptm_score,
-                        "iptm": iptm_score,
-                        "mean_pae": mean_pae,
-                        "best_model": best_model,
-                        "path": str(job_dir),
-                        "n_models": len(models),
-                        "job_type": job_type,
-                        "ptm": float(interface_summary.get("ptm"))
-                        if interface_summary is not None
-                        and pd.notna(interface_summary.get("ptm"))
-                        else None,
-                        "confidence_score": float(
-                            interface_summary.get("confidence_score")
-                        )
-                        if interface_summary is not None
-                        and pd.notna(interface_summary.get("confidence_score"))
-                        else None,
-                        "global_dockq": float(
-                            interface_summary.get("pDockQ/mpDockQ")
-                        )
-                        if interface_summary is not None
-                        and pd.notna(interface_summary.get("pDockQ/mpDockQ"))
-                        else None,
-                        "interface_csv": str(job_dir / "interfaces.csv")
-                        if interface_df is not None
-                        else None,
-                        "interface_summary_model": interface_summary.get("model_used")
-                        if interface_summary is not None
-                        else None,
+                    interface_value_map = {
+                        "iptm": "iptm",
+                        "iptm_ptm": "iptm_ptm",
+                        "average_interface_pae": "mean_pae",
+                        "ptm": "ptm",
+                        "confidence_score": "confidence_score",
+                        "pDockQ/mpDockQ": "global_dockq",
+                        "interface_pDockQ2": "best_interface_pdockq2",
+                        "interface_ipSAE": "best_interface_ipsae",
+                        "interface_LIS": "best_interface_lis",
+                        "interface_score": "interface_score",
+                        "interface_average_plddt": "interface_average_plddt",
+                        "interface_num_intf_residues": "interface_residue_count",
+                        "interface_contact_pairs": "interface_contact_pairs",
+                        "interface_area": "interface_area",
+                        "interface_solv_en": "interface_solv_energy",
+                        "interface_polar": "interface_polar_fraction",
+                        "interface_hydrophobic": "interface_hydrophobic_fraction",
+                        "interface_charged": "interface_charged_fraction",
                     }
-                )
+
+                    for src, dst in interface_value_map.items():
+                        if src not in interface_summary:
+                            continue
+                        value = interface_summary.get(src)
+                        if pd.isna(value):
+                            interface_metrics[dst] = None
+                        else:
+                            interface_metrics[dst] = float(value)
+
+                    iptm_score = interface_metrics.get("iptm", iptm_score)
+                    iptm_ptm_score = interface_metrics.get("iptm_ptm", iptm_ptm_score)
+                    mean_pae = interface_metrics.get("mean_pae", mean_pae)
+
+                result_row = {
+                    "job": job_dir.name,
+                    "iptm_ptm": iptm_ptm_score,
+                    "iptm": iptm_score,
+                    "mean_pae": mean_pae,
+                    "best_model": best_model,
+                    "path": str(job_dir),
+                    "n_models": len(models),
+                    "job_type": job_type,
+                    "interface_csv": str(job_dir / "interfaces.csv")
+                    if interface_df is not None
+                    else None,
+                    "interface_summary_model": interface_summary.get("model_used")
+                    if interface_summary is not None
+                    else None,
+                }
+
+                result_row.update(interface_metrics)
+                results.append(result_row)
 
             except Exception as e:
                 st.warning(f"Error processing {job_dir.name}: {e}")
@@ -454,7 +463,7 @@ class AlphaPulldownAnalyzer:
 
             return float(np.nanmean(pae_copy))
         except Exception:
-            return None
+            return float("nan")
 
 
 def plot_pae_heatmap(pae_file: Path, figsize: Tuple[int, int] = (10, 10)) -> plt.Figure:
@@ -480,8 +489,11 @@ def plot_pae_heatmap(pae_file: Path, figsize: Tuple[int, int] = (10, 10)) -> plt
         return None
 
 
-def plot_model_comparison(models: List[Dict]) -> plt.Figure:
+def plot_model_comparison(models: List[Dict]) -> Optional[plt.Figure]:
     """Create bar plot comparing all models"""
+    if not models:
+        return None
+
     try:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -551,11 +563,13 @@ def create_3dmol_view(
             else structure_format.lower()
         )
 
+        container_id = f"aplit-viewer-{uuid.uuid4().hex}"
+
         html = f"""
-        <div id="container" style="width: 100%; height: {height}px; position: relative;"></div>
+        <div id="{container_id}" style="width: {width}px; height: {height}px; position: relative;"></div>
         <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
         <script>
-            let viewer = $3Dmol.createViewer("container", {{
+            let viewer = $3Dmol.createViewer("{container_id}", {{
                 backgroundColor: 'white'
             }});
 
@@ -577,16 +591,16 @@ def create_3dmol_view(
 
 def get_pae_file_for_model(job_path: Path, model_name: str) -> Optional[Path]:
     """Find the PAE file for a specific model"""
-    # Try direct match
-    pae_file = job_path / f"pae_{model_name}.json"
-    if pae_file.exists():
-        return pae_file
-
-    # Try extracting model number
     model_num = model_name.split("_")[1] if "_" in model_name else model_name
-    pae_file = job_path / f"pae_model_{model_num}.json"
-    if pae_file.exists():
-        return pae_file
+    candidates = [
+        job_path / f"pae_{model_name}.json",
+        job_path / f"pae_model_{model_num}_ptm_pred_0.json",
+        job_path / f"pae_model_{model_num}.json",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
 
     return None
 
