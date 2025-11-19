@@ -4,9 +4,11 @@ AlphaPulldown Structure Viewer - Web Application
 """
 
 import argparse
+import math
 import os
 import time
 from pathlib import Path
+from typing import Dict, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -155,30 +157,6 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
         st.error("No valid multimer predictions found in the specified directory.")
         return
 
-    # Apply filters
-    filtered_df = results_df.copy()
-    filtered_df = filtered_df[filtered_df["iptm"] >= min_iptm]
-    if "mean_pae" in filtered_df.columns:
-        filtered_df = filtered_df[
-            (filtered_df["mean_pae"].isna()) | (filtered_df["mean_pae"] <= max_pae)
-        ]
-
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Predictions", len(filtered_df))
-    with col2:
-        st.metric("Best ipTM", f"{filtered_df['iptm'].max():.3f}")
-    with col3:
-        st.metric("Average ipTM", f"{filtered_df['iptm'].mean():.3f}")
-    with col4:
-        if "mean_pae" in filtered_df.columns and filtered_df["mean_pae"].notna().any():
-            st.metric("Mean PAE (avg)", f"{filtered_df['mean_pae'].mean():.1f} Å")
-        else:
-            st.metric("Mean PAE (avg)", "N/A")
-
-    st.divider()
-
     base_columns_excluded = {
         "job",
         "iptm",
@@ -214,9 +192,25 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
         min_iptm = st.slider(
             "Minimum ipTM", 0.0, 1.0, min_iptm, 0.05, key="iptm_filter"
         )
+    slider_max_pae = 30.0
+    if "mean_pae" in results_df.columns and results_df["mean_pae"].notna().any():
+        max_found_pae = float(results_df["mean_pae"].max(skipna=True))
+        slider_max_pae = max(
+            slider_max_pae, math.ceil(max_found_pae / 5.0) * 5.0
+        )
+
+    if "pae_filter" in st.session_state:
+        st.session_state.pae_filter = min(st.session_state.pae_filter, slider_max_pae)
+
     with col3:
+        default_pae = slider_max_pae if slider_max_pae > max_pae else max_pae
         max_pae = st.slider(
-            "Maximum mean PAE (Å)", 0.0, 30.0, max_pae, 0.5, key="pae_filter"
+            "Maximum mean PAE (Å)",
+            0.0,
+            slider_max_pae,
+            default_pae,
+            0.5,
+            key="pae_filter",
         )
     sort_options = ["ipTM", "ipTM+pTM", "Job name"]
     sort_options.extend(alphajudge_numeric_cols)
@@ -284,6 +278,26 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
                 & (filtered_df[col] <= value_range[1])
             )
         ]
+
+    if filtered_df.empty:
+        st.warning("No predictions match the current filters.")
+        return
+
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Predictions", len(filtered_df))
+    with col2:
+        st.metric("Best ipTM", f"{filtered_df['iptm'].max():.3f}")
+    with col3:
+        st.metric("Average ipTM", f"{filtered_df['iptm'].mean():.3f}")
+    with col4:
+        if "mean_pae" in filtered_df.columns and filtered_df["mean_pae"].notna().any():
+            st.metric("Mean PAE (avg)", f"{filtered_df['mean_pae'].mean():.1f} Å")
+        else:
+            st.metric("Mean PAE (avg)", "N/A")
+
+    st.divider()
 
     # Display table
     st.subheader(f"Predictions ({len(filtered_df)} results)")

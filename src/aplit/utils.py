@@ -5,6 +5,7 @@ Utility functions and data classes for AlphaPulldown analysis
 import csv
 import json
 import math
+import re
 
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -64,6 +65,20 @@ class AlphaPulldownAnalyzer:
             return "af2"
         if (job_dir / "ranking_scores.csv").exists():
             return "af3"
+
+        # AlphaFold 3 jobs (without AlphaJudge) often only contain seed/sample folders
+        # and ranked_* files but no ranking_scores.csv. Detect those patterns as AF3.
+        has_seed_dirs = any(
+            d.is_dir() and re.match(r"seed-[^/]+_sample-[^/]+", d.name)
+            for d in job_dir.iterdir()
+        )
+        if has_seed_dirs:
+            return "af3"
+
+        if list(job_dir.glob("ranked_*_summary_confidences.json")):
+            return "af3"
+        if (job_dir / "ranked_0_model.cif").exists():
+            return "af3"
         return None
 
     def _load_af2_models(self, job_dir: Path) -> List[Dict[str, Any]]:
@@ -95,17 +110,71 @@ class AlphaPulldownAnalyzer:
 
     def _load_af3_models(self, job_dir: Path) -> List[Dict[str, Any]]:
         ranking_path = job_dir / "ranking_scores.csv"
-        if not ranking_path.exists():
+        rows: List[Dict[str, Any]] = []
+
+        if ranking_path.exists():
+            with ranking_path.open(newline="") as f:
+                rows = [row for row in csv.DictReader(f) if row]
+        else:
+            # Fallback 1: seed/sample directories
+            for seed_dir in sorted(job_dir.iterdir()):
+                if not seed_dir.is_dir():
+                    continue
+                m = re.match(r"seed-(?P<seed>[^_]+)_sample-(?P<sample>.+)", seed_dir.name)
+                if not m:
+                    continue
+                summary_path = seed_dir / "summary_confidences.json"
+                row: Dict[str, Any] = {
+                    "seed": m.group("seed"),
+                    "sample": m.group("sample"),
+                    "_model_dir": str(seed_dir),
+                }
+                if summary_path.exists():
+                    try:
+                        with summary_path.open() as f:
+                            summary = json.load(f)
+                        row["_cached_summary"] = summary
+                        row["ranking_score"] = summary.get("ranking_score")
+                    except Exception as exc:
+                        st.warning(f"Could not read {summary_path}: {exc}")
+                rows.append(row)
+
+            # Fallback 2: ranked_* summary files only
+            if not rows:
+                ranked_summaries = sorted(job_dir.glob("ranked_*_summary_confidences.json"))
+                for path in ranked_summaries:
+                    rank_match = re.match(r"ranked_(\d+)_summary_confidences\\.json", path.name)
+                    rank_idx = int(rank_match.group(1)) if rank_match else 0
+                    row = {
+                        "seed": f"ranked_{rank_idx}",
+                        "sample": str(rank_idx),
+                        "ranking_score": None,
+                        "_model_dir": str(job_dir),
+                        "_summary_path": str(path),
+                        "_ranked_idx": rank_idx,
+                    }
+                    try:
+                        with path.open() as f:
+                            summary = json.load(f)
+                        row["_cached_summary"] = summary
+                        row["ranking_score"] = summary.get("ranking_score")
+                    except Exception as exc:
+                        st.warning(f"Could not read {path}: {exc}")
+                    rows.append(row)
+
+        if not rows:
             return []
 
-        with ranking_path.open(newline="") as f:
-            rows = [row for row in csv.DictReader(f) if row]
-
-        def score(row: Dict[str, Any]) -> float:
+        def row_score(row: Dict[str, Any]) -> float:
+            cached = row.get("_cached_summary")
+            if cached:
+                val = self._safe_float(cached.get("ranking_score"), float("-inf"))
+                if val is not None:
+                    return val
             val = self._safe_float(row.get("ranking_score"), float("-inf"))
             return val if val is not None else float("-inf")
 
-        rows.sort(key=score, reverse=True)
+        rows.sort(key=row_score, reverse=True)
 
         models: List[Dict[str, Any]] = []
         for rank_idx, row in enumerate(rows):
@@ -115,21 +184,26 @@ class AlphaPulldownAnalyzer:
                 continue
 
             model_name = f"seed-{seed}_sample-{sample}"
-            model_dir = job_dir / model_name
-            summary_path = model_dir / "summary_confidences.json"
-            summary: Dict[str, Any] = {}
+            model_dir = Path(row.get("_model_dir")) if row.get("_model_dir") else job_dir / model_name
+            summary_path = Path(row.get("_summary_path")) if row.get("_summary_path") else model_dir / "summary_confidences.json"
+            summary: Dict[str, Any] = row.get("_cached_summary", {})
 
-            if not summary_path.exists():
-                fallback_summary = job_dir / f"ranked_{rank_idx}_summary_confidences.json"
-                if fallback_summary.exists():
-                    summary_path = fallback_summary
-
-            if summary_path.exists():
+            if not summary and summary_path.exists():
                 try:
                     with summary_path.open() as f:
                         summary = json.load(f)
                 except Exception as exc:
                     st.warning(f"Could not read {summary_path}: {exc}")
+                    summary = {}
+
+            if not summary and "_ranked_idx" in row:
+                fallback_summary = job_dir / f"ranked_{row['_ranked_idx']}_summary_confidences.json"
+                if fallback_summary.exists():
+                    try:
+                        with fallback_summary.open() as f:
+                            summary = json.load(f)
+                    except Exception as exc:
+                        st.warning(f"Could not read {fallback_summary}: {exc}")
 
             iptm = self._safe_float(summary.get("iptm"), 0.0)
             ptm = self._safe_float(summary.get("ptm"))
@@ -140,13 +214,14 @@ class AlphaPulldownAnalyzer:
                 0.0,
             )
 
-            structure_path = model_dir / "model.cif"
+            structure_path = Path(row.get("_structure_path")) if row.get("_structure_path") else model_dir / "model.cif"
             if not structure_path.exists():
-                ranked_alt = job_dir / f"ranked_{rank_idx}_model.cif"
+                ranked_alt_idx = row.get("_ranked_idx", rank_idx)
+                ranked_alt = job_dir / f"ranked_{ranked_alt_idx}_model.cif"
                 if ranked_alt.exists():
                     structure_path = ranked_alt
                 else:
-                    pdb_alt = job_dir / f"ranked_{rank_idx}.pdb"
+                    pdb_alt = job_dir / f"ranked_{ranked_alt_idx}.pdb"
                     if pdb_alt.exists():
                         structure_path = pdb_alt
             suffix = structure_path.suffix.lower()
@@ -297,38 +372,6 @@ class AlphaPulldownAnalyzer:
                     if interface_df is not None
                     else None
                 )
-                interface_fields: Dict[str, Any] = {}
-                if interface_summary is not None:
-                    skip_fields = {"jobs", "job", "model_used", "interface"}
-                    for col, value in interface_summary.items():
-                        if col in skip_fields:
-                            continue
-                        if col in {"iptm", "iptm_ptm"}:
-                            continue
-                        numeric_val = self._safe_float(value)
-                        if numeric_val is not None:
-                            interface_fields[col] = numeric_val
-                        else:
-                            interface_fields[col] = value
-
-                global_dockq = (
-                    float(interface_summary.get("pDockQ/mpDockQ"))
-                    if interface_summary is not None
-                    and pd.notna(interface_summary.get("pDockQ/mpDockQ"))
-                    else None
-                )
-                interface_ipsae = (
-                    float(interface_summary.get("interface_ipSAE"))
-                    if interface_summary is not None
-                    and pd.notna(interface_summary.get("interface_ipSAE"))
-                    else None
-                )
-                interface_lis = (
-                    float(interface_summary.get("interface_LIS"))
-                    if interface_summary is not None
-                    and pd.notna(interface_summary.get("interface_LIS"))
-                    else None
-                )
 
                 if interface_summary is not None:
                     iptm_score = (
@@ -347,37 +390,40 @@ class AlphaPulldownAnalyzer:
                         else mean_pae
                     )
 
-                result_entry = {
-                    "job": job_dir.name,
-                    "iptm_ptm": iptm_ptm_score,
-                    "iptm": iptm_score,
-                    "mean_pae": mean_pae,
-                    "best_model": best_model,
-                    "path": str(job_dir),
-                    "n_models": len(models),
-                    "job_type": job_type,
-                    "ptm": float(interface_summary.get("ptm"))
-                    if interface_summary is not None
-                    and pd.notna(interface_summary.get("ptm"))
-                    else None,
-                    "confidence_score": float(
-                        interface_summary.get("confidence_score")
-                    )
-                    if interface_summary is not None
-                    and pd.notna(interface_summary.get("confidence_score"))
-                    else None,
-                    "global_dockq": global_dockq,
-                    "best_interface_ipsae": interface_ipsae,
-                    "best_interface_lis": interface_lis,
-                    "interface_csv": str(job_dir / "interfaces.csv")
-                    if interface_df is not None
-                    else None,
-                    "interface_summary_model": interface_summary.get("model_used")
-                    if interface_summary is not None
-                    else None,
-                }
-                result_entry.update(interface_fields)
-                results.append(result_entry)
+                results.append(
+                    {
+                        "job": job_dir.name,
+                        "iptm_ptm": iptm_ptm_score,
+                        "iptm": iptm_score,
+                        "mean_pae": mean_pae,
+                        "best_model": best_model,
+                        "path": str(job_dir),
+                        "n_models": len(models),
+                        "job_type": job_type,
+                        "ptm": float(interface_summary.get("ptm"))
+                        if interface_summary is not None
+                        and pd.notna(interface_summary.get("ptm"))
+                        else None,
+                        "confidence_score": float(
+                            interface_summary.get("confidence_score")
+                        )
+                        if interface_summary is not None
+                        and pd.notna(interface_summary.get("confidence_score"))
+                        else None,
+                        "global_dockq": float(
+                            interface_summary.get("pDockQ/mpDockQ")
+                        )
+                        if interface_summary is not None
+                        and pd.notna(interface_summary.get("pDockQ/mpDockQ"))
+                        else None,
+                        "interface_csv": str(job_dir / "interfaces.csv")
+                        if interface_df is not None
+                        else None,
+                        "interface_summary_model": interface_summary.get("model_used")
+                        if interface_summary is not None
+                        else None,
+                    }
+                )
 
             except Exception as e:
                 st.warning(f"Error processing {job_dir.name}: {e}")
