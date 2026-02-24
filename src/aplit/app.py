@@ -8,6 +8,7 @@ import os
 import time
 import io
 import zipfile
+import re
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -515,6 +516,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
         analyzer_cache: Dict[Path, AlphaPulldownAnalyzer] = {}
         for _, row in filtered_df.iterrows():
             job_name = row["job"]
+            safe_job_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(job_name))
             job_path = Path(row["path"])
             parent_dir = job_path.parent
             if parent_dir not in analyzer_cache:
@@ -528,7 +530,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
             if not structure_file or not Path(structure_file).exists():
                 continue
             structure_path = Path(structure_file)
-            arcname = f"{job_name}{structure_path.suffix}"
+            arcname = f"{safe_job_name}{structure_path.suffix}"
             try:
                 data = structure_path.read_bytes()
             except OSError:
