@@ -6,6 +6,8 @@ AlphaPulldown Structure Viewer - Web Application
 import math
 import os
 import time
+import io
+import zipfile
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -503,9 +505,53 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
                     unsafe_allow_html=True,
                 )
 
-    # Download button at the bottom
+    # Download buttons at the bottom
     st.divider()
     col1, col2, col3 = st.columns([2, 1, 1])
+
+    # Download rank 0 models as ZIP
+    with col2:
+        rank0_entries = []
+        analyzer_cache: Dict[Path, AlphaPulldownAnalyzer] = {}
+        for _, row in filtered_df.iterrows():
+            job_name = row["job"]
+            job_path = Path(row["path"])
+            parent_dir = job_path.parent
+            if parent_dir not in analyzer_cache:
+                analyzer_cache[parent_dir] = AlphaPulldownAnalyzer(str(parent_dir))
+            analyzer = analyzer_cache[parent_dir]
+            models = analyzer.get_all_models(job_path)
+            if not models:
+                continue
+            rank0_model = next((m for m in models if m.get("rank") == 0), models[0])
+            structure_file = rank0_model.get("structure_file")
+            if not structure_file or not Path(structure_file).exists():
+                continue
+            structure_path = Path(structure_file)
+            arcname = f"{job_name}{structure_path.suffix}"
+            try:
+                data = structure_path.read_bytes()
+            except OSError:
+                continue
+            rank0_entries.append((arcname, data))
+
+        if rank0_entries:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for arcname, data in rank0_entries:
+                    zf.writestr(arcname, data)
+            zip_buffer.seek(0)
+            st.download_button(
+                "📦 Download rank 0 models",
+                zip_buffer.getvalue(),
+                file_name="rank0_models.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+        else:
+            st.info("No rank 0 models found for the current filters.")
+
+    # Download CSV of filtered table
     with col3:
         display_df_export = display_df.copy()
         display_df_export.columns = header_cols
