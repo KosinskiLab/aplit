@@ -72,7 +72,7 @@ def _render_last_validation() -> None:
         return
     if validation.get("valid"):
         st.success("Validation succeeded. The frozen project is ready to submit.")
-        columns = st.columns(3)
+        columns = st.columns(5)
         columns[0].metric("Requested folds", validation.get("requested_folds", 0))
         columns[1].metric("Skipped folds", validation.get("skipped_folds", 0))
         columns[2].metric(
@@ -81,6 +81,8 @@ def _render_last_validation() -> None:
             if validation.get("dag_jobs") is not None
             else "N/A",
         )
+        columns[3].metric("CPU jobs", validation.get("cpu_jobs", 0))
+        columns[4].metric("GPU jobs", validation.get("gpu_jobs", 0))
         st.code(" ".join(validation.get("command") or ()), language="bash")
         if st.button("Submit run", type="primary", width="stretch"):
             try:
@@ -209,6 +211,8 @@ def render_submit_page(site: SiteConfig | None) -> None:
                     "requested_folds": plan.requested_folds,
                     "skipped_folds": plan.skipped_folds,
                     "dag_jobs": plan.dag_jobs,
+                    "cpu_jobs": plan.cpu_jobs,
+                    "gpu_jobs": plan.gpu_jobs,
                     "command": list(plan.command),
                 }
         except (SubmissionError, TypeError, ValueError) as exc:

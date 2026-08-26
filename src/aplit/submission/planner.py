@@ -19,6 +19,8 @@ from .registry import (
 )
 
 JOB_ROW_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s+(\d+)\s*$")
+GPU_RULES = {"structure_inference"}
+AGGREGATE_RULES = {"all"}
 PLANNABLE_STATES = {
     RunState.DRAFT.value,
     RunState.READY.value,
@@ -36,6 +38,8 @@ class PlanResult:
     skipped_folds: int
     dag_jobs: int | None
     jobs_by_rule: dict[str, int]
+    cpu_jobs: int
+    gpu_jobs: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +50,8 @@ class PlanResult:
             "skipped_folds": self.skipped_folds,
             "dag_jobs": self.dag_jobs,
             "jobs_by_rule": self.jobs_by_rule,
+            "cpu_jobs": self.cpu_jobs,
+            "gpu_jobs": self.gpu_jobs,
         }
 
 
@@ -87,6 +93,16 @@ def _skipped_folds(project_dir: Path) -> int:
     except OSError:
         return 0
     return max(0, len(lines) - 1)
+
+
+def _resource_job_counts(jobs: dict[str, int]) -> tuple[int, int]:
+    gpu_jobs = sum(count for rule, count in jobs.items() if rule in GPU_RULES)
+    cpu_jobs = sum(
+        count
+        for rule, count in jobs.items()
+        if rule not in GPU_RULES and rule not in AGGREGATE_RULES
+    )
+    return cpu_jobs, gpu_jobs
 
 
 def plan_project(project_dir: Path, *, timeout: float = 300.0) -> PlanResult:
@@ -140,6 +156,7 @@ def plan_project(project_dir: Path, *, timeout: float = 300.0) -> PlanResult:
 
     (metadata_dir(project_dir) / "validation.log").write_text(output, encoding="utf-8")
     total, jobs = parse_job_stats(output)
+    cpu_jobs, gpu_jobs = _resource_job_counts(jobs)
     result = PlanResult(
         valid=return_code == 0,
         command=command,
@@ -148,6 +165,8 @@ def plan_project(project_dir: Path, *, timeout: float = 300.0) -> PlanResult:
         skipped_folds=_skipped_folds(project_dir),
         dag_jobs=total,
         jobs_by_rule=jobs,
+        cpu_jobs=cpu_jobs,
+        gpu_jobs=gpu_jobs,
     )
     atomic_write_json(metadata_dir(project_dir) / "plan.json", result.to_dict())
     update_status(
@@ -159,6 +178,8 @@ def plan_project(project_dir: Path, *, timeout: float = 300.0) -> PlanResult:
             "skipped_folds": result.skipped_folds,
             "dag_jobs": result.dag_jobs,
             "jobs_by_rule": result.jobs_by_rule,
+            "cpu_jobs": result.cpu_jobs,
+            "gpu_jobs": result.gpu_jobs,
         },
     )
     return result

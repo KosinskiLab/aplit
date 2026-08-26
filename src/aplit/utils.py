@@ -19,6 +19,29 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 
+ALPHAJUDGE_IDENTIFIER_COLUMNS = {
+    "jobs",
+    "model_used",
+    "interface",
+    "interface_contact_prob_source",
+}
+ALPHAJUDGE_COLUMN_ALIASES = {
+    "average_interface_pae": "mean_pae",
+    "pDockQ/mpDockQ": "global_dockq",
+    "interface_pDockQ2": "best_interface_pdockq2",
+    "interface_ipSAE": "best_interface_ipsae",
+    "interface_LIS": "best_interface_lis",
+    "interface_average_plddt": "interface_average_plddt",
+    "interface_num_intf_residues": "interface_residue_count",
+    "interface_contact_pairs": "interface_contact_pairs",
+    "interface_area": "interface_area",
+    "interface_solv_en": "interface_solv_energy",
+    "interface_polar": "interface_polar_fraction",
+    "interface_hydrophobic": "interface_hydrophobic_fraction",
+    "interface_charged": "interface_charged_fraction",
+}
+
+
 class AlphaPulldownAnalyzer:
     """Handles analysis of AlphaPulldown prediction directories"""
 
@@ -40,16 +63,27 @@ class AlphaPulldownAnalyzer:
 
     @staticmethod
     def _select_best_interface_row(df: pd.DataFrame) -> Optional[pd.Series]:
-        """Return the interface row with the highest ipTM (fallback to ipTM+PTM)."""
+        """Return the strongest interface using AlphaJudge's score hierarchy."""
         if df is None or df.empty:
             return None
 
         working_df = df.copy()
-        for col in ["iptm", "iptm_ptm"]:
+        priority = [
+            "interface_meta_score",
+            "interface_pDockQ2",
+            "interface_score",
+            "iptm",
+            "iptm_ptm",
+        ]
+        for col in priority:
             if col in working_df.columns:
                 working_df[col] = pd.to_numeric(working_df[col], errors="coerce")
 
-        sort_cols = [col for col in ["iptm", "iptm_ptm"] if col in working_df.columns]
+        sort_cols = [
+            col
+            for col in priority
+            if col in working_df.columns and working_df[col].notna().any()
+        ]
         if sort_cols:
             working_df = working_df.sort_values(
                 sort_cols, ascending=False, na_position="last"
@@ -60,6 +94,23 @@ class AlphaPulldownAnalyzer:
         except IndexError:
             return None
         return df.loc[best_idx]
+
+    @classmethod
+    def _extract_interface_metrics(
+        cls, interface_summary: pd.Series
+    ) -> Dict[str, Optional[float]]:
+        """Carry every numeric AlphaJudge field into the overview row."""
+
+        metrics: Dict[str, Optional[float]] = {}
+        for source, raw_value in interface_summary.items():
+            if source in ALPHAJUDGE_IDENTIFIER_COLUMNS:
+                continue
+            value = cls._safe_float(raw_value)
+            if value is None:
+                continue
+            destination = ALPHAJUDGE_COLUMN_ALIASES.get(source, source)
+            metrics[destination] = value
+        return metrics
 
     def _detect_job_type(self, job_dir: Path) -> Optional[str]:
         if (job_dir / "ranking_debug.json").exists():
@@ -380,35 +431,9 @@ class AlphaPulldownAnalyzer:
 
                 interface_metrics: Dict[str, Optional[float]] = {}
                 if interface_summary is not None:
-                    interface_value_map = {
-                        "iptm": "iptm",
-                        "iptm_ptm": "iptm_ptm",
-                        "average_interface_pae": "mean_pae",
-                        "ptm": "ptm",
-                        "confidence_score": "confidence_score",
-                        "pDockQ/mpDockQ": "global_dockq",
-                        "interface_pDockQ2": "best_interface_pdockq2",
-                        "interface_ipSAE": "best_interface_ipsae",
-                        "interface_LIS": "best_interface_lis",
-                        "interface_score": "interface_score",
-                        "interface_average_plddt": "interface_average_plddt",
-                        "interface_num_intf_residues": "interface_residue_count",
-                        "interface_contact_pairs": "interface_contact_pairs",
-                        "interface_area": "interface_area",
-                        "interface_solv_en": "interface_solv_energy",
-                        "interface_polar": "interface_polar_fraction",
-                        "interface_hydrophobic": "interface_hydrophobic_fraction",
-                        "interface_charged": "interface_charged_fraction",
-                    }
-
-                    for src, dst in interface_value_map.items():
-                        if src not in interface_summary:
-                            continue
-                        value = interface_summary.get(src)
-                        if pd.isna(value):
-                            interface_metrics[dst] = None
-                        else:
-                            interface_metrics[dst] = float(value)
+                    interface_metrics = self._extract_interface_metrics(
+                        interface_summary
+                    )
 
                     iptm_score = interface_metrics.get("iptm", iptm_score)
                     iptm_ptm_score = interface_metrics.get("iptm_ptm", iptm_ptm_score)

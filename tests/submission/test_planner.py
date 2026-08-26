@@ -51,6 +51,8 @@ def test_successful_dry_run_marks_project_ready(fake_site: SiteConfig) -> None:
     assert result.valid
     assert result.requested_folds == 2
     assert result.dag_jobs == 3
+    assert result.cpu_jobs == 0
+    assert result.gpu_jobs == 2
     assert read_status(prepared.path)["state"] == "ready"
 
 

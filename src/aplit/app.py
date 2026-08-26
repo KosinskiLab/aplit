@@ -703,8 +703,11 @@ def render_viewer_page(results_df: pd.DataFrame):
     if model_interfaces is not None and not model_interfaces.empty:
         iface_numeric = model_interfaces.copy()
         for col in [
+            "interface_meta_score",
             "interface_pDockQ2",
             "interface_score",
+            "interface_ipSAE",
+            "interface_LIS",
             "average_interface_pae",
             "pDockQ/mpDockQ",
         ]:
@@ -715,8 +718,11 @@ def render_viewer_page(results_df: pd.DataFrame):
         sort_columns = [
             col
             for col in [
+                "interface_meta_score",
                 "interface_pDockQ2",
                 "interface_score",
+                "interface_ipSAE",
+                "interface_LIS",
                 "average_interface_pae",
             ]
             if col in iface_numeric.columns
@@ -736,14 +742,37 @@ def render_viewer_page(results_df: pd.DataFrame):
 
         st.success("AlphaJudge interface scores available for this model.")
         metric_specs = [
+            ("Interface meta score", "interface_meta_score", lambda v: f"{float(v):.3f}"),
             ("Global DockQ", "pDockQ/mpDockQ", lambda v: f"{float(v):.3f}"),
             ("Best interface pDockQ2", "interface_pDockQ2", lambda v: f"{float(v):.3f}"),
             ("Best interface ipSAE", "interface_ipSAE", lambda v: f"{float(v):.3f}"),
             ("Best interface LIS", "interface_LIS", lambda v: f"{float(v):.3f}"),
+            ("Contact-restricted LIS", "interface_cLIS", lambda v: f"{float(v):.3f}"),
+            ("Integrated LIS", "interface_iLIS", lambda v: f"{float(v):.3f}"),
             ("Interface score", "interface_score", lambda v: f"{float(v):.1f}"),
             ("Interface avg pLDDT", "interface_average_plddt", lambda v: f"{float(v):.1f}"),
             ("Interface residues", "interface_num_intf_residues", lambda v: f"{int(v)}"),
             ("Contact pairs", "interface_contact_pairs", lambda v: f"{int(v)}"),
+            (
+                "Contact probability max",
+                "interface_contact_prob_max",
+                lambda v: f"{float(v):.3f}",
+            ),
+            (
+                "Contact probability top-10 mean",
+                "interface_contact_prob_top10_mean",
+                lambda v: f"{float(v):.3f}",
+            ),
+            (
+                "Expected contacts",
+                "interface_expected_contacts",
+                lambda v: f"{float(v):.2f}",
+            ),
+            ("Contact confidence CCC", "interface_ccc", lambda v: f"{float(v):.3f}"),
+            ("Hydrogen bonds", "interface_hb", lambda v: f"{int(v)}"),
+            ("Salt bridges", "interface_sb", lambda v: f"{int(v)}"),
+            ("Disulfide bonds", "interface_ss", lambda v: f"{int(v)}"),
+            ("Shape complementarity", "interface_sc", lambda v: f"{float(v):.3f}"),
             ("Interface area (Å²)", "interface_area", lambda v: f"{float(v):.0f}"),
             (
                 "Interface solvation energy",
@@ -759,6 +788,10 @@ def render_viewer_page(results_df: pd.DataFrame):
             ),
             ("Interface charged fraction", "interface_charged", lambda v: f"{float(v):.2f}"),
         ]
+
+        contact_source = best_iface.get("interface_contact_prob_source")
+        if pd.notna(contact_source) and str(contact_source).strip():
+            st.caption(f"Contact-probability source: {contact_source}")
 
         metrics_data = []
         for label, key, formatter in metric_specs:

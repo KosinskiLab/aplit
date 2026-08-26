@@ -44,8 +44,18 @@ scheduler:
 # Trusted site-managed values merged into the workflow config before the
 # user's small allowlist of scientific overrides.
 workflow_config:
-  slurm_partition: "gpu"
-  slurm_partition_cpu: "cpu"
+  # Comma-separated values let SLURM choose any eligible partition.
+  slurm_partition: "gpu-el8,gpu-training"
+  slurm_partition_cpu: "htc-el8,htc-el10,bigmem,bigmem-el10"
   slurm_qos: normal
   structure_inference_gpus_per_task: 1
+  structure_inference_max_runtime: 10080
+  structure_inference_unified_memory: true
   analysis_container: "/shared/apptainer/alphajudge.sif"
+
+  # Optional site-specific length/VRAM routing. Replace these node names or
+  # remove the block. Smaller tiers are excluded when a complex needs more VRAM.
+  structure_inference_gpu_tiers:
+    - {min_vram_gb: 24, nodes: "gpu-small01,gpu-small02"}
+    - {min_vram_gb: 48, nodes: "gpu-large01,gpu-large02"}
+    - {min_vram_gb: 80, nodes: "gpu-h10001,gpu-h10002"}

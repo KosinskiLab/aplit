@@ -9,7 +9,7 @@ from typing import Any
 from .models import RunState
 from .processes import process_matches
 from .registry import read_manifest, read_status, update_status
-from .scheduler import query_slurm_jobs
+from .scheduler import SchedulerJob, filter_slurm_jobs, query_slurm_jobs
 
 ACTIVE_STATES = {
     RunState.SUBMITTING.value,
@@ -19,7 +19,11 @@ ACTIVE_STATES = {
 }
 
 
-def reconcile_project(project_dir: Path) -> dict[str, Any]:
+def reconcile_project(
+    project_dir: Path,
+    *,
+    scheduler_snapshot: tuple[SchedulerJob, ...] | None = None,
+) -> dict[str, Any]:
     manifest = read_manifest(project_dir)
     status = read_status(project_dir)
     controller = status.get("controller") or {}
@@ -31,12 +35,16 @@ def reconcile_project(project_dir: Path) -> dict[str, Any]:
     site = manifest.get("site") or {}
     jobs = ()
     if site.get("executor") == "slurm":
-        jobs = query_slurm_jobs(
-            prefix=str(manifest["slurm_jobname_prefix"]),
-            squeue_executable=Path(
-                str(site.get("squeue_executable", "/usr/bin/squeue"))
-            ),
-        )
+        prefix = str(manifest["slurm_jobname_prefix"])
+        if scheduler_snapshot is None:
+            jobs = query_slurm_jobs(
+                prefix=prefix,
+                squeue_executable=Path(
+                    str(site.get("squeue_executable", "/usr/bin/squeue"))
+                ),
+            )
+        else:
+            jobs = filter_slurm_jobs(scheduler_snapshot, prefix=prefix)
 
     changes: dict[str, Any] = {"scheduler_jobs": [job.to_dict() for job in jobs]}
     state = str(status.get("state"))
