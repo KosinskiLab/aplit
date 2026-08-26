@@ -3,12 +3,13 @@
 AlphaPulldown Structure Viewer - Web Application
 """
 
+import hmac
+import io
 import math
 import os
-import time
-import io
-import zipfile
 import re
+import time
+import zipfile
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -16,15 +17,19 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from utils import (
+from aplit.submission.errors import ValidationError
+from aplit.submission.site_config import load_active_site
+from aplit.utils import (
     AlphaPulldownAnalyzer,
-    plot_pae_heatmap,
-    plot_model_comparison,
     create_3dmol_view,
     get_pae_file_for_model,
-    load_interfaces_csv,
     get_pae_plot_image,
+    load_interfaces_csv,
+    plot_model_comparison,
+    plot_pae_heatmap,
 )
+from aplit.views.runs import render_runs_page
+from aplit.views.submit import render_submit_page
 
 # Set page config
 st.set_page_config(
@@ -79,6 +84,43 @@ def initialize_session_state():
         st.session_state.selected_job = None
     if "results_df" not in st.session_state:
         st.session_state.results_df = None
+    if "app_section" not in st.session_state:
+        requested_section = str(st.query_params.get("section", "Results"))
+        st.session_state.app_section = (
+            requested_section
+            if requested_section in {"Results", "Submit", "Runs"}
+            else "Results"
+        )
+    if "predictions_directory" not in st.session_state:
+        st.session_state.predictions_directory = get_default_directory()
+
+
+def enforce_access_token():
+    """Require the per-instance prototype token when the launcher configured one."""
+    expected = os.environ.get("APLIT_ACCESS_TOKEN", "")
+    if not expected:
+        return
+    supplied = str(st.query_params.get("token", ""))
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        st.error("A valid APLit access token is required for this instance.")
+        st.stop()
+
+
+def render_primary_navigation() -> str:
+    target = st.session_state.pop("navigation_target", None)
+    if target in {"Results", "Submit", "Runs"}:
+        st.session_state.app_section = target
+        st.session_state.navigation_widget = target
+    elif "navigation_widget" not in st.session_state:
+        st.session_state.navigation_widget = st.session_state.app_section
+    st.sidebar.title("APLit")
+    selected = st.sidebar.radio(
+        "Workspace",
+        ["Results", "Submit", "Runs"],
+        key="navigation_widget",
+    )
+    st.session_state.app_section = selected
+    return selected
 
 
 def get_default_directory() -> str:
@@ -95,12 +137,14 @@ def navigate_to_viewer(job_name: str):
 
 def render_sidebar(output_dir: str):
     """Render sidebar configuration"""
-    st.sidebar.title("Configuration")
+    st.sidebar.subheader("Results configuration")
 
     # Directory input
+    if output_dir and not st.session_state.get("predictions_directory"):
+        st.session_state.predictions_directory = output_dir
     directory = st.sidebar.text_input(
         "Predictions Directory",
-        value=output_dir,
+        key="predictions_directory",
         help="Path to directory containing AlphaPulldown predictions",
     )
 
@@ -110,14 +154,14 @@ def render_sidebar(output_dir: str):
     st.sidebar.subheader("Navigation")
     if st.sidebar.button(
         "← Overview",
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state.current_page = "overview"
         st.rerun()
 
     if st.sidebar.button(
         "Structure Viewer →",
-        use_container_width=True,
+        width="stretch",
         disabled=st.session_state.selected_job is None,
     ):
         st.session_state.current_page = "viewer"
@@ -134,7 +178,7 @@ def render_sidebar(output_dir: str):
 
     if st.sidebar.button(
         "Refresh Now",
-        use_container_width=True,
+        width="stretch",
     ):
         st.cache_data.clear()
         st.rerun()
@@ -410,7 +454,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
                         if st.button(
                             job_name,
                             key=f"job_{job_name}_{idx}",
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             navigate_to_viewer(job_name)
                     elif key == "iptm":
@@ -548,7 +592,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
                 zip_buffer.getvalue(),
                 file_name="rank0_models.zip",
                 mime="application/zip",
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("No rank 0 models found for the current filters.")
@@ -563,7 +607,7 @@ def render_overview_page(results_df: pd.DataFrame, min_iptm: float, max_pae: flo
             csv,
             file_name="predictions.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -603,7 +647,7 @@ def render_viewer_page(results_df: pd.DataFrame):
         if st.button(
             "Next prediction →",
             key="next_prediction_button",
-            use_container_width=True,
+            width="stretch",
         ):
             next_idx = (job_list.index(selected_job) + 1) % len(job_list)
             st.session_state.selected_job = job_list[next_idx]
@@ -767,7 +811,7 @@ def render_viewer_page(results_df: pd.DataFrame):
 
     with tab3:
         if pae_image:
-            st.image(str(pae_image), use_container_width=True)
+            st.image(str(pae_image), width="stretch")
         elif pae_file:
             fig = plot_pae_heatmap(pae_file, figsize=(10, 10))
             if fig:
@@ -786,7 +830,7 @@ def render_viewer_page(results_df: pd.DataFrame):
                     f,
                     file_name=f"{selected_job}_rank_{selected_model['rank']}{structure_file.suffix}",
                     mime="chemical/x-pdb" if structure_format == "pdb" else "chemical/x-mmcif",
-                    use_container_width=True,
+                    width="stretch",
                 )
     with col2:
         if pae_file:
@@ -796,7 +840,7 @@ def render_viewer_page(results_df: pd.DataFrame):
                     f,
                     file_name=f"{selected_job}_rank_{selected_model['rank']}_pae.json",
                     mime="application/json",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
     if (
@@ -807,7 +851,7 @@ def render_viewer_page(results_df: pd.DataFrame):
         st.divider()
         with st.expander("Interface details (AlphaJudge)", expanded=False):
             download_df = model_interfaces.reset_index(drop=True)
-            st.dataframe(download_df, use_container_width=True)
+            st.dataframe(download_df, width="stretch")
             csv_data = download_df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download interfaces CSV (model)",
@@ -820,6 +864,29 @@ def render_viewer_page(results_df: pd.DataFrame):
 def main():
     """Main application"""
     initialize_session_state()
+    enforce_access_token()
+
+    section = render_primary_navigation()
+    try:
+        site = load_active_site()
+    except ValidationError as exc:
+        site = None
+        st.error(f"Could not load site configuration: {exc}")
+    if site is not None and site.access_token_required and not os.environ.get(
+        "APLIT_ACCESS_TOKEN"
+    ):
+        st.error(
+            "This site requires an access token. Start it through the `aplit` CLI "
+            "so a per-instance token can be generated."
+        )
+        st.stop()
+
+    if section == "Submit":
+        render_submit_page(site)
+        return
+    if section == "Runs":
+        render_runs_page(site)
+        return
 
     # Default directory (can be overridden by sidebar)
     default_dir = get_default_directory()

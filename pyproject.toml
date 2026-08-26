@@ -14,6 +14,7 @@ packages = [{include = "aplit", from = "src"}]
 include = [
     "LICENSE",
     "README.md",
+    { path = "examples/site-config.yaml", format = ["sdist", "wheel"] },
 ]
 
 [tool.poetry.scripts]
@@ -24,3 +25,7 @@ streamlit = ">=1.51.0"
 pandas = ">=2.2.2"
 matplotlib = ">=3.10.5"
 numpy = ">=1.26.4"
+PyYAML = ">=6.0.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0"

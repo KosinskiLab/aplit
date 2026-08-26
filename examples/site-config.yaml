@@ -1,0 +1,51 @@
+schema_version: 1
+name: Example SLURM site
+
+deployment:
+  projects_root: "/scratch/{username}/aplit/projects"
+  workflow_template: "/shared/workflows/AlphaPulldownSnakemake/2.7.0"
+  snakemake_executable: "/shared/conda/envs/snakemake/bin/snakemake"
+  project_mode: "0700"
+  access_token_required: true
+
+allowed_input_roots:
+  - "/scratch/{username}"
+  - "/g"
+
+databases_directory: "/shared/alphafold/databases"
+feature_directories:
+  - "/shared/alphafold/features"
+
+backends:
+  af2:
+    data_pipeline: alphafold2
+    fold_backend: alphafold2
+    prediction_container: "/shared/apptainer/alphafold2-2.7.0.sif"
+    weights_directory: "/shared/alphafold/af2-weights"
+  af3:
+    data_pipeline: alphafold3
+    fold_backend: alphafold3
+    prediction_container: "/shared/apptainer/alphafold3-2.7.0.sif"
+    weights_directory: "/shared/alphafold/af3-weights"
+
+execution:
+  executor: slurm
+  profile_template: "config/profiles/slurm"
+  max_parallel_jobs: 200
+  retries: 3
+  # Requires snakemake-executor-plugin-slurm >= 2.2.0.
+  slurm_jobname_prefix: aplit
+
+scheduler:
+  squeue_executable: /usr/bin/squeue
+  scancel_executable: /usr/bin/scancel
+  sacct_executable: /usr/bin/sacct
+
+# Trusted site-managed values merged into the workflow config before the
+# user's small allowlist of scientific overrides.
+workflow_config:
+  slurm_partition: "gpu"
+  slurm_partition_cpu: "cpu"
+  slurm_qos: normal
+  structure_inference_gpus_per_task: 1
+  analysis_container: "/shared/apptainer/alphajudge.sif"

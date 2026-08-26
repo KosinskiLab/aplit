@@ -1,12 +1,13 @@
+#!/usr/bin/env python3
 """
 Command-line interface for APLit
 """
 
-import sys
-import os
 import argparse
+import os
+import secrets
 import subprocess
-
+import sys
 from pathlib import Path
 
 
@@ -58,6 +59,20 @@ For more information, visit: https://github.com/KosinskiLab/aplit
         help="Force headless mode (never open a browser).",
     )
 
+    parser.add_argument(
+        "--site-config",
+        type=str,
+        default="",
+        help="Path to the APLit submission site YAML configuration.",
+    )
+
+    parser.add_argument(
+        "--access-token",
+        type=str,
+        default="",
+        help="Prototype access token; generated automatically when the site requires one.",
+    )
+
     args = parser.parse_args()
 
     if args.browser and args.no_browser:
@@ -101,10 +116,35 @@ For more information, visit: https://github.com/KosinskiLab/aplit
             sys.exit(1)
         cmd.extend(["--", "--directory", args.directory])
 
+    site_config_path = None
+    access_token = args.access_token
+    if args.site_config:
+        site_config_path = Path(args.site_config).expanduser().resolve()
+        if not site_config_path.is_file():
+            print(
+                f"Error: site configuration '{site_config_path}' does not exist",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        try:
+            from aplit.submission.errors import SubmissionError
+            from aplit.submission.models import SiteConfig
+
+            site = SiteConfig.load(site_config_path)
+        except (SubmissionError, TypeError, ValueError) as exc:
+            print(f"Error: invalid site configuration: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if site.access_token_required and not access_token:
+            access_token = secrets.token_urlsafe(32)
+
     # Prepare environment
     env = os.environ.copy()
     if args.directory:
         env["APLIT_DEFAULT_DIRECTORY"] = str(Path(args.directory).resolve())
+    if site_config_path:
+        env["APLIT_SITE_CONFIG"] = str(site_config_path)
+    if access_token:
+        env["APLIT_ACCESS_TOKEN"] = access_token
 
     # Print startup message
     print("=" * 70)
@@ -113,6 +153,12 @@ For more information, visit: https://github.com/KosinskiLab/aplit
     if args.directory:
         print(f"Directory: {args.directory}")
     print(f"Server: http://{args.server_address}:{args.port}")
+    if site_config_path:
+        print(f"Site config: {site_config_path}")
+    if access_token:
+        print(
+            f"Authenticated URL: http://{args.server_address}:{args.port}/?token={access_token}"
+        )
     print("=" * 70)
     print("\nStarting server... Press Ctrl+C to stop")
     print()
@@ -123,8 +169,8 @@ For more information, visit: https://github.com/KosinskiLab/aplit
     except KeyboardInterrupt:
         print("\n\nServer stopped.")
         sys.exit(0)
-    except Exception as e:
-        print(f"\nError running APLit: {e}", file=sys.stderr)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"\nError running APLit: {exc}", file=sys.stderr)
         sys.exit(1)
 
 

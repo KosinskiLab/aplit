@@ -29,6 +29,72 @@ aplit
 aplit --directory /path/to/predictions --port 8502
 ```
 
+## Submission prototype
+
+APLit can also prepare, validate, submit, track, resume, and cancel
+AlphaPulldownSnakemake projects. Submission is disabled unless a site configuration is
+provided, so the existing results-only command remains unchanged.
+
+Start a per-user instance on the cluster login host:
+
+```bash
+aplit \
+  --site-config /path/to/site-config.yaml \
+  --server-address localhost \
+  --no-browser
+```
+
+When `access_token_required` is enabled, the CLI prints a generated authenticated URL.
+Forward the selected port through SSH and open that complete URL, including its token.
+Each APLit process submits as the Unix account that started it.
+
+This process-per-user setup is the first deployment profile, not a permanent service
+constraint. A shared web service would need an authenticated delegation mechanism that
+still submits under each user's cluster identity (for example, a site-provided submission
+agent or SLURM REST integration); browser authentication alone cannot change the Unix
+owner of local Snakemake and SLURM processes.
+
+See [`examples/site-config.yaml`](examples/site-config.yaml) for the site schema. Shared
+database, weights, container, profile, and scheduler settings are administrator-controlled;
+the submission form exposes only backend selection and a small allowlist of run overrides.
+Safe run-scoped cancellation uses the SLURM executor's `--slurm-jobname-prefix` option,
+so the cluster Snakemake environment must include
+[`snakemake-executor-plugin-slurm` 2.2.0 or newer](https://github.com/snakemake/snakemake-executor-plugin-slurm/blob/main/CHANGELOG.md).
+
+Shared read-only Apptainer/Singularity image files and shared weights directories are
+intentional. Concurrent runs can use the same image and weights paths; per-run writable
+state remains inside each generated project and the configured Apptainer cache.
+
+### Submission behavior
+
+- Direct-complex and bait-prey modes are mutually exclusive.
+- FASTA records may be uploaded or referenced through paths under `allowed_input_roots`.
+- Uploaded multi-record FASTAs are split into safe aliases displayed by the form.
+- Validation creates a frozen project and runs Snakemake with `--dry-run`.
+- Reusing a matching project name resumes its frozen project. A changed input fingerprint
+  is rejected instead of overwriting data.
+- Cancellation stops the local controller and explicitly cancels all SLURM jobs carrying
+  that run's unique prefix.
+
+Generated projects contain their own workflow snapshot, resolved configuration, manifest,
+status, event log, controller log, and output directory. No database or task queue is
+required.
+
+### Testing and GUI inspection
+
+Create a development environment and run all service and Streamlit GUI tests:
+
+```bash
+uv venv .venv
+uv pip install --python .venv/bin/python -e . pytest
+.venv/bin/python -m pytest -q
+```
+
+The GUI suite uses Streamlit `AppTest` to exercise navigation, mutually exclusive forms,
+validation, project generation, detached launch, and the Runs page. For visual inspection,
+start APLit with a local/fake site configuration and inspect `?section=Results`,
+`?section=Submit`, and `?section=Runs`; these query parameters only choose the initial page.
+
 Inside the UI open **Configuration ▸ Predictions Directory** and point it to the parent folder that contains your AlphaPulldown jobs (AF2 or AF3):
 
 ```
