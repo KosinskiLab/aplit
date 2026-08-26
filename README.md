@@ -168,31 +168,25 @@ If validation succeeds, select **Submit run**. Open **Runs** to see the controll
 state, active SLURM partitions, requested CPU/GPU resources, memory, elapsed time,
 time limit, and pending reason.
 
-## Example 2: AF3 with an uploaded FASTA
-
-Create a file named `example_chain.fasta`:
-
-```fasta
->example_chain
-MKTIIALSYIFCLVFADYKDDDDKGGGGSAAAA
-```
+## Example 2: a simple AF3 monomer
 
 Open **Submit** and enter:
 
-- **Project name:** `af3-upload-example`
+- **Project name:** `af3-uniprot-example`
 - **Input mode:** `Direct complexes`
 - **Backend:** `af3`
-- upload `example_chain.fasta`;
 - **Complexes:**
 
   ```text
-  example_chain+P68871
+  P01258
   ```
 
-The uploaded filename stem becomes the alias shown by the form. A multi-record
-FASTA is split into one safely named alias per record. The uploaded sequence is
-copied into the generated project, checksummed, and referenced using its frozen
-project path.
+Each line is one fold specification. A single UniProt accession requests a
+monomer, and `P01258+P01579` requests a complex. AlphaPulldownSnakemake reuses a
+configured precomputed feature when available; otherwise it fetches the sequence
+from UniProt and generates the feature automatically. Copies and residue ranges use
+the same syntax as AlphaPulldownSnakemake: `Q8I2G6:2` requests a dimer and
+`Q8I2G6:1-100` selects residues 1–100.
 
 Validate, submit, and monitor the run as in the AF2 example. AF2 and AF3 runs may
 use the same shared, read-only SIF and weights paths concurrently; writable state
@@ -301,7 +295,7 @@ explicitly cancels every current-user SLURM job whose name belongs to that run.
 ## Resume and project contents
 
 Reusing a project name with the same scientific inputs resumes its frozen workflow
-after showing a warning. If the backend, inputs, uploads, or allowlisted overrides
+after showing a warning. If the backend, inputs, or allowlisted overrides
 differ, APLit refuses the collision instead of overwriting the project. An active
 project cannot be revalidated or launched a second time.
 
@@ -314,7 +308,6 @@ project/
 │   ├── config.yaml                 # resolved site + scientific configuration
 │   ├── profile/                    # copied Snakemake profile
 │   └── sample_sheet.csv            # or baits.txt + preys.txt
-├── input/uploads/                  # staged uploaded FASTAs
 ├── output/predictions/
 └── .aplit/
     ├── run.json                    # immutable provenance and command

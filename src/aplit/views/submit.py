@@ -9,14 +9,12 @@ import streamlit as st
 import yaml
 
 from aplit.submission.errors import SubmissionError
-from aplit.submission.inputs import upload_aliases
 from aplit.submission.launcher import launch_project
 from aplit.submission.models import (
     InputMode,
     RunSpec,
     RunState,
     SiteConfig,
-    UploadedFasta,
 )
 from aplit.submission.planner import plan_project
 from aplit.submission.project import prepare_project
@@ -48,10 +46,6 @@ def _parse_overrides(text: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise TypeError("Advanced overrides must be a YAML mapping")
     return parse_allowlisted_overrides(value)
-
-
-def _uploaded_fastas(files: list[Any] | None) -> tuple[UploadedFasta, ...]:
-    return tuple(UploadedFasta(file.name, file.getvalue()) for file in files or ())
 
 
 def _render_last_validation() -> None:
@@ -126,24 +120,18 @@ def render_submit_page(site: SiteConfig | None) -> None:
             horizontal=True,
         )
         backend = st.selectbox("Backend", sorted(site.backends))
-        uploads = st.file_uploader(
-            "Upload FASTA files",
-            type=["fa", "faa", "fasta", "fas"],
-            accept_multiple_files=True,
-            help="Use the sanitized filename stem as an alias in the input rows below.",
+        st.info(
+            "**Complex syntax:** enter one fold per line using UniProt accessions. "
+            "`P01258` is a monomer; `P01258+P01579` is a complex; `Q8I2G6:2` "
+            "requests two copies; and `Q8I2G6:1-100` selects a residue range. "
+            "Configured precomputed features are reused; otherwise "
+            "AlphaPulldownSnakemake fetches the sequence from UniProt automatically."
         )
-        if uploads:
-            try:
-                aliases = upload_aliases(_uploaded_fastas(uploads))
-            except SubmissionError as exc:
-                st.error(str(exc))
-            else:
-                st.caption(f"Uploaded aliases: {', '.join(aliases)}")
 
         if mode_label == "Direct complexes":
             direct_text = st.text_area(
                 "Complexes",
-                placeholder="P01258+P01579\nP01258\nuploaded_protein+P01579",
+                placeholder="P01258+P01579\nP01258\nQ8I2G6:2:1-100+Q8I5K4",
                 help="One AlphaPulldown fold specification per line.",
             )
             bait_text = ""
@@ -151,7 +139,7 @@ def render_submit_page(site: SiteConfig | None) -> None:
         else:
             direct_text = ""
             left, right = st.columns(2)
-            bait_text = left.text_area("Baits", placeholder="P01258\n/path/bait.fasta")
+            bait_text = left.text_area("Baits", placeholder="P01258\nP69905")
             prey_text = right.text_area("Preys", placeholder="P01579\nP61769")
 
         overrides_text = st.text_area(
@@ -176,7 +164,6 @@ def render_submit_page(site: SiteConfig | None) -> None:
                 direct_complexes=normalize_nonempty_lines(direct_text),
                 baits=normalize_nonempty_lines(bait_text),
                 preys=normalize_nonempty_lines(prey_text),
-                uploads=_uploaded_fastas(uploads),
                 overrides=_parse_overrides(overrides_text),
             )
             result = validate_run_spec(spec, site)

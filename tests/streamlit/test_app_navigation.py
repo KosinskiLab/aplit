@@ -36,6 +36,11 @@ def test_configured_submit_form_switches_exclusive_modes(
     assert mode.value == "Direct complexes"
     assert any(item.label == "Complexes" for item in app.text_area)
     assert not any(item.label == "Baits" for item in app.text_area)
+    assert not app.file_uploader
+    assert any(
+        "P01258+P01579" in item.value and "UniProt automatically" in item.value
+        for item in app.info
+    )
 
     mode.set_value("Bait–prey screen").run()
     assert any(item.label == "Baits" for item in app.text_area)
