@@ -22,11 +22,18 @@ backends:
     fold_backend: alphafold2
     prediction_container: "/shared/apptainer/alphafold2-2.7.0.sif"
     weights_directory: "/shared/alphafold/af2-weights"
+    # Optional per-backend overrides; omit either key to use the site defaults above.
+    databases_directory: "/shared/alphafold/af2-databases"
+    feature_directories:
+      - "/shared/alphafold/af2-features"
   af3:
     data_pipeline: alphafold3
     fold_backend: alphafold3
     prediction_container: "/shared/apptainer/alphafold3-2.7.0.sif"
     weights_directory: "/shared/alphafold/af3-weights"
+    databases_directory: "/shared/alphafold/af3-databases"
+    feature_directories:
+      - "/shared/alphafold/af3-features"
 
 execution:
   executor: slurm

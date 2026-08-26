@@ -92,6 +92,8 @@ For more information, visit: https://github.com/KosinskiLab/aplit
 
     # Build streamlit command
     cmd = [
+        sys.executable,
+        "-m",
         "streamlit",
         "run",
         str(app_path),

@@ -116,6 +116,8 @@ def _resolved_workflow_config(
     input_files: list[str],
 ) -> dict[str, Any]:
     backend = site.backend(spec.backend)
+    databases_directory = site.backend_databases_directory(spec.backend)
+    feature_directories = site.backend_feature_directories(spec.backend)
     config = _load_base_config(site)
     config.update(site.workflow_config)
     config.update(parse_allowlisted_overrides(spec.overrides))
@@ -123,9 +125,9 @@ def _resolved_workflow_config(
         {
             "input_files": input_files,
             "output_directory": str(project_dir / "output"),
-            "databases_directory": str(site.databases_directory),
+            "databases_directory": str(databases_directory),
             "backend_weights_directory": str(backend.weights_directory),
-            "feature_directory": [str(path) for path in site.feature_directories],
+            "feature_directory": [str(path) for path in feature_directories],
             "prediction_container": str(backend.prediction_container),
         }
     )

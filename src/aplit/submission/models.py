@@ -65,6 +65,8 @@ class BackendPreset:
     fold_backend: str
     prediction_container: Path
     weights_directory: Path
+    databases_directory: Path | None = None
+    feature_directories: tuple[Path, ...] | None = None
 
     @classmethod
     def from_mapping(cls, key: str, value: Mapping[str, Any]) -> BackendPreset:
@@ -85,16 +87,36 @@ class BackendPreset:
             fold_backend=str(value["fold_backend"]),
             prediction_container=Path(str(value["prediction_container"])).expanduser(),
             weights_directory=Path(str(value["weights_directory"])).expanduser(),
+            databases_directory=(
+                Path(str(value["databases_directory"])).expanduser()
+                if value.get("databases_directory") is not None
+                else None
+            ),
+            feature_directories=(
+                tuple(
+                    Path(str(path)).expanduser()
+                    for path in value.get("feature_directories", ())
+                )
+                if "feature_directories" in value
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "key": self.key,
             "data_pipeline": self.data_pipeline,
             "fold_backend": self.fold_backend,
             "prediction_container": str(self.prediction_container),
             "weights_directory": str(self.weights_directory),
         }
+        if self.databases_directory is not None:
+            result["databases_directory"] = str(self.databases_directory)
+        if self.feature_directories is not None:
+            result["feature_directories"] = [
+                str(path) for path in self.feature_directories
+            ]
+        return result
 
 
 @dataclass(frozen=True)
@@ -159,10 +181,22 @@ class SiteConfig:
         if project_mode & 0o002:
             raise ValidationError("deployment.project_mode must not be world-writable")
 
-        backends = {
-            str(key): BackendPreset.from_mapping(str(key), item)
-            for key, item in backend_values.items()
-        }
+        backends = {}
+        for key, item in backend_values.items():
+            rendered = dict(item)
+            for path_key in (
+                "prediction_container",
+                "weights_directory",
+                "databases_directory",
+            ):
+                if rendered.get(path_key) is not None:
+                    rendered[path_key] = cls._expand(rendered[path_key], username)
+            if "feature_directories" in rendered:
+                rendered["feature_directories"] = [
+                    cls._expand(path, username)
+                    for path in rendered["feature_directories"]
+                ]
+            backends[str(key)] = BackendPreset.from_mapping(str(key), rendered)
         return cls(
             schema_version=schema_version,
             name=str(value.get("name") or "Unnamed site"),
@@ -221,6 +255,20 @@ class SiteConfig:
             raise ValidationError(
                 f"Unknown backend '{key}'; choose one of {', '.join(sorted(self.backends))}"
             ) from exc
+
+    def backend_databases_directory(self, key: str) -> Path:
+        """Resolve a backend-specific database path with the site default fallback."""
+
+        backend = self.backend(key)
+        return backend.databases_directory or self.databases_directory
+
+    def backend_feature_directories(self, key: str) -> tuple[Path, ...]:
+        """Resolve backend-specific feature stores with the site default fallback."""
+
+        backend = self.backend(key)
+        if backend.feature_directories is not None:
+            return backend.feature_directories
+        return self.feature_directories
 
     def snapshot(self) -> dict[str, Any]:
         return {

@@ -94,11 +94,15 @@ backends:
     fold_backend: alphafold2
     prediction_container: "/shared/apptainer/alphafold2.sif"
     weights_directory: "/shared/alphafold/af2-weights"
+    databases_directory: "/shared/alphafold/af2-databases"
+    feature_directories: ["/shared/alphafold/af2-features"]
   af3:
     data_pipeline: alphafold3
     fold_backend: alphafold3
     prediction_container: "/shared/apptainer/alphafold3.sif"
     weights_directory: "/shared/alphafold/af3-weights"
+    databases_directory: "/shared/alphafold/af3-databases"
+    feature_directories: ["/shared/alphafold/af3-features"]
 
 execution:
   executor: slurm
@@ -116,6 +120,10 @@ workflow_config:
   enable_structure_analysis: true
   analysis_container: "/shared/apptainer/alphajudge.sif"
 ```
+
+`databases_directory` and `feature_directories` under a backend override the
+site-wide defaults for that preset. This is needed when AF2 and AF3 use different
+database releases or incompatible precomputed feature formats.
 
 Start a per-user instance on a login node:
 

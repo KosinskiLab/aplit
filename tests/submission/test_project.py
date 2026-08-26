@@ -96,3 +96,30 @@ def test_trusted_site_workflow_config_is_applied(fake_site: SiteConfig) -> None:
     config = yaml.safe_load((prepared.path / "config" / "config.yaml").read_text())
     assert config["slurm_partition"] == "gpu-a,gpu-b"
     assert config["slurm_qos"] == "normal"
+
+
+def test_project_config_uses_backend_specific_databases_and_features(
+    fake_site: SiteConfig, tmp_path: Path
+) -> None:
+    backend_databases = tmp_path / "af3-databases"
+    backend_features = tmp_path / "af3-features"
+    backend_databases.mkdir()
+    backend_features.mkdir()
+    backend = replace(
+        fake_site.backends["af3"],
+        databases_directory=backend_databases,
+        feature_directories=(backend_features,),
+    )
+    site = replace(fake_site, backends={"af3": backend})
+    spec = RunSpec(
+        project_name="backend-paths",
+        input_mode=InputMode.DIRECT,
+        backend="af3",
+        direct_complexes=("P01258",),
+    )
+
+    project = prepare_project(spec, site)
+    config = yaml.safe_load((project.path / "config" / "config.yaml").read_text())
+
+    assert config["databases_directory"] == str(backend_databases)
+    assert config["feature_directory"] == [str(backend_features)]

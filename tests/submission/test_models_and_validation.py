@@ -63,6 +63,44 @@ def test_site_preflight_accepts_complete_local_fixture(fake_site: SiteConfig) ->
     assert result.valid, result.errors
 
 
+def test_site_preflight_checks_backend_specific_data_paths(
+    fake_site: SiteConfig, tmp_path
+) -> None:
+    backend = fake_site.backends["af3"]
+    configured = SiteConfig.from_mapping(
+        {
+            "schema_version": 1,
+            "name": "Backend paths",
+            "deployment": {
+                "projects_root": str(fake_site.projects_root),
+                "workflow_template": str(fake_site.workflow_template),
+                "snakemake_executable": str(fake_site.snakemake_executable),
+            },
+            "databases_directory": str(fake_site.databases_directory),
+            "feature_directories": [str(path) for path in fake_site.feature_directories],
+            "backends": {
+                "af3": {
+                    "data_pipeline": backend.data_pipeline,
+                    "fold_backend": backend.fold_backend,
+                    "prediction_container": str(backend.prediction_container),
+                    "weights_directory": str(backend.weights_directory),
+                    "databases_directory": str(tmp_path / "missing-db"),
+                    "feature_directories": [str(tmp_path / "missing-features")],
+                }
+            },
+            "execution": {
+                "executor": "local",
+                "profile_template": str(fake_site.profile_template),
+            },
+        }
+    )
+
+    result = preflight_site(configured)
+
+    assert any("Backend af3 databases" in error for error in result.errors)
+    assert any("Backend af3 feature" in error for error in result.errors)
+
+
 def test_fold_shell_metacharacters_are_rejected(fake_site: SiteConfig) -> None:
     result = validate_run_spec(
         RunSpec(

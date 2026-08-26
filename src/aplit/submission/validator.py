@@ -223,6 +223,28 @@ def preflight_site(site: SiteConfig) -> ValidationResult:
             )
 
     for backend in site.backends.values():
+        databases_directory = site.backend_databases_directory(backend.key)
+        if not databases_directory.is_dir():
+            errors.append(
+                f"Backend {backend.key} databases directory does not exist: "
+                f"{databases_directory}"
+            )
+        elif not os.access(databases_directory, os.R_OK | os.X_OK):
+            errors.append(
+                f"Backend {backend.key} databases directory is not readable: "
+                f"{databases_directory}"
+            )
+        for feature_directory in site.backend_feature_directories(backend.key):
+            if not feature_directory.is_dir():
+                errors.append(
+                    f"Backend {backend.key} feature directory does not exist: "
+                    f"{feature_directory}"
+                )
+            elif not os.access(feature_directory, os.R_OK | os.X_OK):
+                errors.append(
+                    f"Backend {backend.key} feature directory is not readable: "
+                    f"{feature_directory}"
+                )
         if not backend.prediction_container.exists():
             errors.append(
                 f"Backend {backend.key} container does not exist: "
